@@ -1,0 +1,48 @@
+# 本地工具链、签名材料、运行数据与安装包
+/.local/
+/.venv/
+/venv/
+/dist/
+.coding-remote/
+
+# Python 缓存与测试输出
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# 构建中间文件与本地依赖
+node_modules/
+/build/
+*.egg-info/
+*.class
+*.dex
+*.log
+*.tmp
+*.apk
+*.apk.idsig
+*.exe
+*.dll
+*.so
+
+# 本地配置与密钥
+.env
+.env.*
+!.env.example
+*.p12
+*.pfx
+*.jks
+*.keystore
+
+# 编辑器与系统临时文件
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.swp
+*~

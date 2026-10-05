@@ -1,0 +1,22 @@
+coding远程助手 2.0.6 — local modified build, 2026-10-05.
+
+Based on Codex Mobile Assistant Windows 1.6.23 and Android 1.0.19.
+This is not an official upstream release.
+
+Windows: original bundled Python runtime, Codex bridge, libraries, icons and
+cloudflared are retained. The launcher is replaced with a native application.
+Original web assets are removed. QR pairing uses expiring one-use secrets;
+there is no password login or fixed-domain setup. Claude uses the existing
+Desktop session APIs via a signed file connector. A bundled keyboard helper
+opens normal DevTools and types the connector using SendInput only after
+verifying Claude Console focus. No clipboard or debug launch flags are used.
+
+Android: native Claude, Codex, DeepSeek and Settings screens replace the WebView.
+Original branding assets and scanner are retained. CaptureManager's two
+missing AndroidX permission calls use the Android platform equivalents.
+The camera permission flow is retained. Package ID: io.github.abyxs.codingremote.
+It uses a local signing key and coexists with the upstream app.
+
+Original licenses and third-party notices remain applicable. ZXing Android
+Embedded and ZXing Core are licensed under Apache License 2.0. No Claude
+Desktop executable is bundled. Private Desktop APIs are version dependent.
