@@ -7,6 +7,8 @@ import threading
 import time
 from pathlib import Path
 
+from . import VERSION
+
 
 class CodexRPC:
     METHODS = {'initialize', 'plugin/installed', 'collaborationMode/list',
@@ -37,7 +39,7 @@ class CodexRPC:
             finally: self.messages.put(None)
         self.reader = threading.Thread(target=read, daemon=True); self.reader.start()
         try:
-            self.request('initialize', {'clientInfo': {'name': 'coding_remote_metadata', 'version': '2.0.11'}, 'capabilities': {'experimentalApi': True}})
+            self.request('initialize', {'clientInfo': {'name': 'coding_remote_metadata', 'version': VERSION}, 'capabilities': {'experimentalApi': True}})
             self.process.stdin.write('{"method":"initialized"}\n'); self.process.stdin.flush()
         except Exception:
             self.__exit__(); raise

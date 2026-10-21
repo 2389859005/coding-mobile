@@ -14,6 +14,13 @@ import java.util.regex.*;
 
 /** Bounded native transcript renderer. Source text is never interpreted as HTML. */
 final class MessageContent {
+    private static final Pattern COMPILED_IMAGE_LINK=Pattern.compile("!?\\[[^\\]\\n]*\\]\\((?:<([^>]+)>|([^\\n)]+))\\)");
+    private static final Pattern COMPILED_IMAGE_PATH=Pattern.compile("(?im)(?:^|[ `\"])((?:[A-Z]:[/\\\\]|/)[^\\r\\n<>\"`]*?\\.(?:png|jpe?g|webp|gif|bmp))(?=$|[ `\")])");
+    private static final Pattern COMPILED_MARKDOWN_LINK=Pattern.compile("!?\\[([^\\]\\n]*)\\]\\((?:<([^>]+)>|([^\\n)]+))\\)");
+    private static final Pattern COMPILED_HEADING=Pattern.compile("^(#{1,4})\\s+(.+)$");
+    private static final Pattern COMPILED_INLINE=Pattern.compile("\\*\\*(.+?)\\*\\*|`([^`]+)`");
+    private static final Pattern COMPILED_KEYWORD=Pattern.compile("\\b(class|def|return|if|else|import|from|const|let|var|function|public|private|void|new|true|false|null|async|await)\\b");
+    private static final Pattern COMPILED_QUOTED=Pattern.compile("[\"'][^\"'\\n]*[\"']");
     private final Context context;
     private final NativeUi ui;
     MessageContent(Context c,NativeUi u){context=c;ui=u;}
@@ -49,12 +56,12 @@ final class MessageContent {
         }
         if(inCode)code(parent,code.toString(),language);
         if(prose.length()>0)paragraph(parent,prose.toString(),true);
-        if(context instanceof MainActivity){java.util.LinkedHashSet<String> images=new java.util.LinkedHashSet<>();Matcher imageLinks=Pattern.compile("!?\\[[^\\]\\n]*\\]\\((?:<([^>]+)>|([^\\n)]+))\\)").matcher(source);while(imageLinks.find()){String path=imageLinks.group(1)!=null?imageLinks.group(1):imageLinks.group(2);if(path.matches("(?i).*\\.(png|jpe?g|webp|gif|bmp)$")&&!path.matches("(?i)^[a-z]+://.*"))images.add(path);}Matcher bare=Pattern.compile("(?im)(?:^|[ `\"])((?:[A-Z]:[/\\\\]|/)[^\\r\\n<>\"`]*?\\.(?:png|jpe?g|webp|gif|bmp))(?=$|[ `\")])").matcher(source);while(bare.find())images.add(bare.group(1));int shown=0;for(String reference:images){if(shown++>=6)break;ImageView image=new ImageView(context);image.setScaleType(ImageView.ScaleType.FIT_CENTER);image.setBackground(ui.surface(NativeUi.SOFT,12,true));image.setContentDescription("图片预览");LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,ui.dp(200));lp.bottomMargin=ui.dp(10);parent.addView(image,lp);image.setOnClickListener(v->((MainActivity)context).openReference(reference));image.setOnLongClickListener(v->{((MainActivity)context).messageActions(source);return true;});((MainActivity)context).loadInlineImage(image,reference);}}
-        if(context instanceof MainActivity){Matcher links=Pattern.compile("!?\\[([^\\]\\n]*)\\]\\((?:<([^>]+)>|([^\\n)]+))\\)").matcher(source);int count=0;while(links.find()&&count++<8){String path=links.group(2)!=null?links.group(2):links.group(3);if(path.matches("(?i)^[a-z]+://.*"))continue;final String reference=path.replaceFirst(":\\d+$","");if(reference.matches("(?i).*\\.(png|jpe?g|webp|gif|bmp)$"))continue;Button open=ui.button("预览 · "+(links.group(1).isEmpty()?reference:links.group(1)),false);open.setSingleLine();open.setEllipsize(android.text.TextUtils.TruncateAt.END);open.setOnClickListener(v->((MainActivity)context).openReference(reference));parent.addView(open,new LinearLayout.LayoutParams(-1,ui.dp(48)));}}
+        if(context instanceof MainActivity){java.util.LinkedHashSet<String> images=new java.util.LinkedHashSet<>();Matcher imageLinks=COMPILED_IMAGE_LINK.matcher(source);while(imageLinks.find()){String path=imageLinks.group(1)!=null?imageLinks.group(1):imageLinks.group(2);if(path.matches("(?i).*\\.(png|jpe?g|webp|gif|bmp)$")&&!path.matches("(?i)^[a-z]+://.*"))images.add(path);}Matcher bare=COMPILED_IMAGE_PATH.matcher(source);while(bare.find())images.add(bare.group(1));int shown=0;for(String reference:images){if(shown++>=6)break;ImageView image=new ImageView(context);image.setScaleType(ImageView.ScaleType.FIT_CENTER);image.setBackground(ui.surface(NativeUi.SOFT,NativeUi.CORNER_ROW,true));image.setContentDescription("图片预览");LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,ui.dp(200));lp.bottomMargin=ui.dp(10);parent.addView(image,lp);image.setOnClickListener(v->((MainActivity)context).openReference(reference));image.setOnLongClickListener(v->{((MainActivity)context).messageActions(source);return true;});((MainActivity)context).loadInlineImage(image,reference);}}
+        if(context instanceof MainActivity){Matcher links=COMPILED_MARKDOWN_LINK.matcher(source);int count=0;while(links.find()&&count++<8){String path=links.group(2)!=null?links.group(2):links.group(3);if(path.matches("(?i)^[a-z]+://.*"))continue;final String reference=path.replaceFirst(":\\d+$","");if(reference.matches("(?i).*\\.(png|jpe?g|webp|gif|bmp)$"))continue;Button open=ui.button("预览 · "+(links.group(1).isEmpty()?reference:links.group(1)),false);open.setSingleLine();open.setEllipsize(android.text.TextUtils.TruncateAt.END);open.setOnClickListener(v->((MainActivity)context).openReference(reference));parent.addView(open,new LinearLayout.LayoutParams(-1,ui.dp(48)));}}
     }
 
     private void paragraph(LinearLayout parent,String source,boolean markdown){
-        TextView text=ui.text("",16,NativeUi.INK);text.setTextIsSelectable(true);text.setLineSpacing(ui.dp(5),1.08f);
+        TextView text=ui.text("",NativeUi.TITLE,NativeUi.INK);text.setTextIsSelectable(true);text.setLineSpacing(ui.dp(5),1.08f);
         text.setText(markdown?format(source):source);selectable(text,source);LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);
         lp.bottomMargin=ui.dp(10);parent.addView(text,lp);
     }
@@ -62,9 +69,9 @@ final class MessageContent {
         SpannableStringBuilder result=new SpannableStringBuilder();
         for(String raw:source.split("\n",-1)){
             if(result.length()>0)result.append('\n');int start=result.length();
-            Matcher heading=Pattern.compile("^(#{1,4})\\s+(.+)$").matcher(raw);
+            Matcher heading=COMPILED_HEADING.matcher(raw);
             boolean isHeading=heading.matches();String line=isHeading?heading.group(2):raw.replaceFirst("^[-*] ","• ");
-            Matcher inline=Pattern.compile("\\*\\*(.+?)\\*\\*|`([^`]+)`").matcher(line);int offset=0;
+            Matcher inline=COMPILED_INLINE.matcher(line);int offset=0;
             while(inline.find()){
                 result.append(line.substring(offset,inline.start()));int mark=result.length();
                 result.append(inline.group(1)!=null?inline.group(1):inline.group(2));
@@ -77,20 +84,20 @@ final class MessageContent {
         }return result;
     }
     void code(LinearLayout parent,String source,String language){
-        LinearLayout card=new LinearLayout(context);card.setOrientation(1);card.setBackground(ui.surface(NativeUi.WHITE,14,true));card.setClipToOutline(true);
+        LinearLayout card=new LinearLayout(context);card.setOrientation(1);card.setBackground(ui.surface(NativeUi.WHITE,NativeUi.CORNER_ROW,true));card.setClipToOutline(true);
         LinearLayout header=new LinearLayout(context);header.setGravity(Gravity.CENTER_VERTICAL);header.setPadding(ui.dp(12),0,0,0);
         String name=language.isEmpty()?"代码":language;
-        TextView label=ui.text(name,12,NativeUi.MUTED);label.setSingleLine();label.setEllipsize(android.text.TextUtils.TruncateAt.END);ui.leading(label,"code",NativeUi.GREEN,16);
+        TextView label=ui.text(name,NativeUi.CAPTION,NativeUi.MUTED);label.setSingleLine();label.setEllipsize(android.text.TextUtils.TruncateAt.END);ui.leading(label,"code",NativeUi.GREEN,NativeUi.GLYPH_INLINE);
         header.addView(label,new LinearLayout.LayoutParams(0,ui.dp(44),1));label.setGravity(Gravity.CENTER_VERTICAL);
         Button copy=ui.iconButton("copy","复制代码");header.addView(copy,new LinearLayout.LayoutParams(ui.dp(48),ui.dp(48)));
         copy.setOnClickListener(v->{((ClipboardManager)context.getSystemService(Context.CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("代码",source));Toast.makeText(context,"代码已复制",Toast.LENGTH_SHORT).show();});
         card.addView(header);
-        View rule=new View(context);rule.setBackgroundColor(NativeUi.LINE);card.addView(rule,new LinearLayout.LayoutParams(-1,ui.dp(1)));
-        TextView code=ui.text("",13,NativeUi.CODE);code.setTypeface(Typeface.MONOSPACE);code.setTextIsSelectable(true);code.setPadding(ui.dp(12),ui.dp(12),ui.dp(12),ui.dp(12));code.setHorizontallyScrolling(true);
+        View rule=new View(context);rule.setBackgroundColor(NativeUi.rule(NativeUi.WHITE));card.addView(rule,new LinearLayout.LayoutParams(-1,ui.dp(1)));
+        TextView code=ui.text("",NativeUi.LABEL,NativeUi.CODE);NativeUi.monospace(code);code.setTextIsSelectable(true);code.setPadding(ui.dp(12),ui.dp(12),ui.dp(12),ui.dp(12));code.setHorizontallyScrolling(true);
         boolean diff=language.equalsIgnoreCase("diff")||language.equalsIgnoreCase("patch");
         SpannableStringBuilder styled=new SpannableStringBuilder(source);
-        if(diff){int start=0;for(String line:source.split("\n",-1)){int end=start+line.length();if(end>start&&(line.startsWith("+")||line.startsWith("-"))){styled.setSpan(new BackgroundColorSpan(line.startsWith("+")?NativeUi.DIFF_ADD:NativeUi.DIFF_REMOVE),start,end,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);styled.setSpan(new ForegroundColorSpan(line.startsWith("+")?NativeUi.GREEN:NativeUi.RED),start,end,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);}start=end+1;}}
-        if(!diff){Matcher words=Pattern.compile("\\b(class|def|return|if|else|import|from|const|let|var|function|public|private|void|new|true|false|null|async|await)\\b").matcher(source);while(words.find())styled.setSpan(new ForegroundColorSpan(NativeUi.KEYWORD),words.start(),words.end(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);Matcher strings=Pattern.compile("[\"'][^\"'\\n]*[\"']").matcher(source);while(strings.find())styled.setSpan(new ForegroundColorSpan(NativeUi.STRING),strings.start(),strings.end(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);}
+        if(diff){int start=0;for(String line:source.split("\n",-1)){int end=start+line.length();if(end>start&&(line.startsWith("+")||line.startsWith("-"))){boolean added=line.startsWith("+");styled.setSpan(new BackgroundColorSpan(added?NativeUi.DIFF_ADD:NativeUi.DIFF_REMOVE),start,end,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);styled.setSpan(new ForegroundColorSpan(added?NativeUi.DIFF_ADD_TEXT:NativeUi.DIFF_REMOVE_TEXT),start,end,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);}start=end+1;}}
+        if(!diff){Matcher words=COMPILED_KEYWORD.matcher(source);while(words.find())styled.setSpan(new ForegroundColorSpan(NativeUi.KEYWORD),words.start(),words.end(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);Matcher strings=COMPILED_QUOTED.matcher(source);while(strings.find())styled.setSpan(new ForegroundColorSpan(NativeUi.STRING),strings.start(),strings.end(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);}
         code.setText(styled);selectable(code,source);HorizontalScrollView horizontal=new HorizontalScrollView(context);horizontal.setFillViewport(true);horizontal.addView(code);
         ScrollView vertical=new NativeUi.InnerScroll(context);vertical.setFillViewport(false);vertical.setBackgroundColor(NativeUi.SOFT);vertical.addView(horizontal);
         // Only long code blocks scroll vertically; short snippets keep their natural height.

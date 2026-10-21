@@ -45,6 +45,15 @@ class Pairing:
             self.pending = None
             self.codes.clear()
 
+    def retain_temporary(self,origin):
+        """Keep already paired temporary credentials when a route drops on its own.
+
+        Revoking them turns every tunnel hiccup into a re-scan. The credential
+        still expires by itself, and the user can still close the connection.
+        """
+        with self.lock:
+            self.codes={k:v for k,v in self.codes.items() if v['origin']!=origin}
+
     def close_temporary(self,origin):
         with self.lock:
             self.temporary_origins.discard(origin)

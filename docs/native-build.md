@@ -1,6 +1,6 @@
 # 原生版构建
 
-适用于 Windows / Android **2.0.11**。当前仓库提供适配层和 Android 原生界面，构建时仍复用指定上游安装包的运行时、Codex Bridge、扫码与其他组件；不是脱离原包即可重建的完整上游工程。
+适用于 Windows / Android **2.1.1**。当前仓库提供适配层和 Android 原生界面，构建时仍复用指定上游安装包的运行时、Codex Bridge、扫码与其他组件；不是脱离原包即可重建的完整上游工程。
 
 两份原始安装包均来自 [Abyxs/codex-mobile-assistant](https://github.com/Abyxs/codex-mobile-assistant)，它是 [try2love/codex-mobile-bridge](https://github.com/try2love/codex-mobile-bridge) 的二次开发项目。基础包可从 [Abyxs 项目的 Releases](https://github.com/Abyxs/codex-mobile-assistant/releases) 获取，具体版本与散列要求见下表。
 
@@ -45,9 +45,9 @@ keytool -genkeypair -keystore .local/signing/claude-adapter.p12 -storetype PKCS1
 
 输出：
 
-- `dist/CodingRemoteAssistant-Windows-2.0.11.exe`
-- `dist/CodingRemoteAssistant-Windows-2.0.11.build.json`
-- `dist/CodingRemoteAssistant-Android-2.0.11.apk`
+- `dist/CodingRemoteAssistant-Windows-2.1.1.exe`
+- `dist/CodingRemoteAssistant-Windows-2.1.1.build.json`
+- `dist/CodingRemoteAssistant-Android-2.1.1.apk`
 
 构建脚本输出各安装包 SHA-256；发布前更新 `dist/SHA256SUMS.txt`。原生 Android 构建不接受任意历史 APK。省略 `--source` 时可以使用已保留的固定散列基础包，但最新 APK 不能直接充当该基础包。
 

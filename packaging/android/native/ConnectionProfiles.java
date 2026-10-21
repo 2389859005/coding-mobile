@@ -54,8 +54,13 @@ final class ConnectionProfiles {
             try{
                 String host=route.getString("origin"),secret=route.getString("token");
                 // Probe before writes. Once POST begins, there is exactly one transport attempt.
+                // Writes probe /api/device, reads probe the path itself, but the identity
+                // check uses whichever payload carries computerId, so polling GETs are
+                // no longer accepted from a host that merely holds a valid token.
+                String expected=route.optString("computerId");
                 result=net.request(host,secret,body==null?path:"/api/device",null);
-                if(body!=null&&!route.optString("computerId").isEmpty()&&!route.optString("computerId").equals(result.optString("computerId")))throw new SecurityException("电脑身份不匹配，请重新扫码");
+                String reported=result.optString("computerId");
+                if(!expected.isEmpty()&&!reported.isEmpty()&&!expected.equals(reported))throw new SecurityException("电脑身份不匹配，请重新扫码");
                 health(route,true);chosen=route;break;
             }catch(IOException e){last=e;if(!retryable(e))throw e;health(route,false);if(e instanceof HttpFailure&&((HttpFailure)e).code==401)unauthorized.add(route.optString("token"));}
         }

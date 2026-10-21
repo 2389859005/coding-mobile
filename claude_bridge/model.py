@@ -38,7 +38,13 @@ def session(surface, raw):
                              'needsInput': item.get('toolName') == 'AskUserQuestion'})
     return {'id': gateway_id(surface, native), 'nativeId': native, 'backend': surface,
             'host': 'local', 'title': raw.get('title') or '未命名 Claude 会话',
-            'cwd': raw.get('originCwd') or raw.get('cwd') or '', 'model': raw.get('model'),
+            # cwd is what Desktop's own file APIs resolve against; originCwd is the
+            # project the session was started from. Preferring originCwd made the
+            # phone browse a different tree than the one Desktop reads, so every
+            # file preview fell back to rebuilding the transcript.
+            'cwd': raw.get('cwd') or raw.get('originCwd') or '',
+            'projectCwd': raw.get('originCwd') or raw.get('cwd') or '',
+            'model': raw.get('model'),
             'effort': raw.get('effort', raw.get('effortLevel')),
             'permissionMode': raw.get('permissionMode') or 'desktop',
             'updatedAt': raw.get('lastActivityAt', raw.get('createdAt', 0)),

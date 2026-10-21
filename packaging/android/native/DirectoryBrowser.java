@@ -22,13 +22,19 @@ final class DirectoryBrowser {
         this.activity=activity;this.ui=ui;this.root=root;this.loader=loader;this.open=open;
         body=new LinearLayout(activity);body.setOrientation(1);body.setPadding(ui.dp(16),0,ui.dp(16),ui.dp(12));
         LinearLayout bar=new LinearLayout(activity);up=ui.iconButton("back","上一级目录");bar.addView(up,new LinearLayout.LayoutParams(ui.dp(48),ui.dp(48)));
-        location=ui.text(root,13,NativeUi.INK);location.setMaxLines(2);location.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);bar.addView(location,new LinearLayout.LayoutParams(0,ui.dp(48),1));location.setGravity(Gravity.CENTER_VERTICAL);
+        location=ui.text(root,NativeUi.LABEL,NativeUi.INK);location.setMaxLines(2);location.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);bar.addView(location,new LinearLayout.LayoutParams(0,ui.dp(48),1));location.setGravity(Gravity.CENTER_VERTICAL);
         Button refresh=ui.iconButton("refresh","刷新工作目录");bar.addView(refresh,new LinearLayout.LayoutParams(ui.dp(48),ui.dp(48)));body.addView(bar);
-        status=ui.text("长按文件或目录复制路径",12,NativeUi.MUTED);body.addView(status,new LinearLayout.LayoutParams(-1,ui.dp(32)));
-        list=new ListView(activity);list.setDivider(null);list.setSelector(ui.touch(NativeUi.TINT,10,false));
+        status=ui.text("长按文件或目录复制路径",NativeUi.CAPTION,NativeUi.MUTED);body.addView(status,new LinearLayout.LayoutParams(-1,ui.dp(36)));
+        list=new ListView(activity);list.setDivider(null);list.setSelector(ui.touch(NativeUi.TINT,NativeUi.CORNER_CHIP,false));
         adapter=new BaseAdapter(){public int getCount(){return rows.size();}public Object getItem(int n){return rows.get(n);}public long getItemId(int n){return n;}
-            public View getView(int n,View recycled,ViewGroup parent){TextView label=recycled instanceof TextView?(TextView)recycled:ui.text("",14,NativeUi.INK);JSONObject row=rows.get(n);label.setText(row.optString("name"));label.setSingleLine();label.setEllipsize(android.text.TextUtils.TruncateAt.END);label.setGravity(Gravity.CENTER_VERTICAL);label.setPadding(ui.dp(10),0,ui.dp(10),0);label.setLayoutParams(new AbsListView.LayoutParams(-1,ui.dp(52)));ui.leading(label,row.optBoolean("directory")?"folder":"file",NativeUi.MUTED,20);return label;}};
-        list.setAdapter(adapter);body.addView(list,new LinearLayout.LayoutParams(-1,Math.min(ui.dp(380),activity.getResources().getDisplayMetrics().heightPixels/2)));
+            public View getView(int n,View recycled,ViewGroup parent){TextView label=recycled instanceof TextView?(TextView)recycled:ui.text("",NativeUi.LABEL,NativeUi.INK);JSONObject row=rows.get(n);label.setText(row.optString("name"));label.setSingleLine();label.setEllipsize(android.text.TextUtils.TruncateAt.END);label.setGravity(Gravity.CENTER_VERTICAL);label.setPadding(ui.dp(10),0,ui.dp(10),0);label.setLayoutParams(new AbsListView.LayoutParams(-1,ui.dp(NativeUi.ROW_TALL)));ui.leading(label,row.optBoolean("directory")?"folder":"file",NativeUi.MUTED,NativeUi.GLYPH_INLINE);return label;}};
+        // The list used to be capped at 380dp or half the screen, whichever was
+        // smaller, without accounting for the bar, status line and footer that share
+        // the sheet - on a short device the footer was pushed off the bottom.
+        int screen=activity.getResources().getDisplayMetrics().heightPixels;
+        int chrome=ui.dp(48)+ui.dp(36)+ui.dp(48)+ui.dp(12);
+        int listHeight=Math.max(ui.dp(180),Math.min(ui.dp(380),screen/2-chrome/2));
+        list.setAdapter(adapter);body.addView(list,new LinearLayout.LayoutParams(-1,listHeight));
         more=ui.button("加载更多",false);body.addView(more,new LinearLayout.LayoutParams(-1,ui.dp(48)));more.setVisibility(View.GONE);
         up.setOnClickListener(v->parent());location.setOnLongClickListener(v->{copy(location.getText().toString());return true;});refresh.setOnClickListener(v->navigate(path,true));
         list.setOnItemClickListener((p,v,n,id)->{JSONObject row=rows.get(n);if(row.optBoolean("directory"))navigate(row.optString("path"),false);else open.open(row);});
@@ -36,6 +42,8 @@ final class DirectoryBrowser {
         more.setOnClickListener(v->{if(!loading)load(path,rows.size());});
     }
     void show(String initial){dialog=new NativeDialogBuilder(activity,ui).setTitle("工作目录").setView(body).setNegativeButton("关闭",null).create();dialog.setOnDismissListener(d->ticket++);dialog.setOnKeyListener((d,key,event)->{if(key==KeyEvent.KEYCODE_BACK&&!path.isEmpty()&&!path.equals(".")){if(event.getAction()==KeyEvent.ACTION_UP)parent();return true;}return false;});dialog.show();ui.window(dialog.getWindow(),true);navigate(initial,false);}
+    /** Reuse is what makes reopening the sheet instant; release it on session change. */
+    void close(){ticket++;cache.clear();rows.clear();path="";if(dialog!=null){if(dialog.isShowing())dialog.dismiss();dialog=null;}}
     private void copy(String value){if(value.isEmpty())return;((ClipboardManager)activity.getSystemService(Context.CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("路径",value));Toast.makeText(activity,"路径已复制",Toast.LENGTH_SHORT).show();}
     private String absolute(String relative){if(relative.startsWith("/")||relative.matches("^[A-Za-z]:.*"))return relative;String separator=root.contains("\\")?"\\":"/";return root.replaceAll("[/\\\\]+$","")+(relative.isEmpty()||relative.equals(".")?"":separator+relative.replace("/",separator));}
     private void saveScroll(){Page previous=cache.get(path);if(previous!=null){previous.first=list.getFirstVisiblePosition();previous.top=list.getChildCount()==0?0:list.getChildAt(0).getTop();}}

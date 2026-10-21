@@ -62,7 +62,7 @@ public final class UiRegression extends Instrumentation {
                 Object chat=fresh("ChatCache");set(chat,"page",page);((Map)get(app,"chatCaches")).put("codex:fixture-0",chat);
                 call("showTab",new Class[]{String.class},"codex");
             });
-            ui(()->{ListView list=(ListView)get(app,"sessionList");require(list.getAdapter().getCount()==5001,"sessions grouped by default");require(list.getChildCount()<40,"session views recycled");list.setSelectionFromTop(30,0);});
+            ui(()->{ListView list=(ListView)get(app,"sessionList");require(list.getAdapter().getCount()==5002,"sessions grouped by default");require(list.getChildCount()<40,"session views recycled");list.setSelectionFromTop(30,0);});
             for(int i=0;i<12;i++){
                 ui(()->call("showTab",new Class[]{String.class},"claude"));
                 ui(()->call("showTab",new Class[]{String.class},"codex"));
@@ -77,10 +77,10 @@ public final class UiRegression extends Instrumentation {
             ui(()->call("showTab",new Class[]{String.class},"codex"));
             ui(()->require(((View)get(app,"bottom")).getVisibility()==View.VISIBLE,"bottom restored on list"));
             // Search, grouping and project filters must keep every matching record reachable.
-            ui(()->{((EditText)get(app,"search")).setText("Synthetic session 4999");require(((ListView)get(app,"sessionList")).getAdapter().getCount()==2,"search includes project heading");});
+            ui(()->{((EditText)get(app,"search")).setText("Synthetic session 4999");require(((ListView)get(app,"sessionList")).getAdapter().getCount()==3,"search includes project heading and archive entry");});
             ui(()->{((EditText)get(app,"search")).setText("no-such-title");require(((View)get(app,"emptyState")).getVisibility()==View.VISIBLE,"empty search state");});
-            ui(()->{((EditText)get(app,"search")).setText("");require(((ListView)get(app,"sessionList")).getAdapter().getCount()==5001,"group includes all sessions");});
-            ui(()->{ListView list=(ListView)get(app,"sessionList");list.performItemClick(list.getChildAt(0),0,0);require(list.getAdapter().getCount()==1,"project collapses");list.performItemClick(list.getChildAt(0),0,0);require(list.getAdapter().getCount()==5001,"project expands");});
+            ui(()->{((EditText)get(app,"search")).setText("");require(((ListView)get(app,"sessionList")).getAdapter().getCount()==5002,"group includes all sessions plus the archive entry");});
+            ui(()->{ListView list=(ListView)get(app,"sessionList");list.performItemClick(list.getChildAt(0),0,0);require(list.getAdapter().getCount()==2,"project collapses; the archive entry stays reachable");list.performItemClick(list.getChildAt(0),0,0);require(list.getAdapter().getCount()==5002,"project expands");});
 
             JSONArray sampleSessions=new JSONArray();String[] titles={"重构移动端的聊天界面","为项目添加深色模式","整理 API 文档与示例","优化首页加载速度","修复登录状态同步","设计一组简洁的图标"};
             for(int i=0;i<titles.length;i++)sampleSessions.put(new JSONObject().put("id","preview-"+i).put("title",titles[i]).put("cwd",i<3?"D:/work/coding-remote":"D:/work/design-system").put("backend","codex").put("status",i==0?"active":"idle").put("updatedAt",System.currentTimeMillis()-i*86400000L));
@@ -93,7 +93,7 @@ public final class UiRegression extends Instrumentation {
             ui(()->{Object cache=((Map)get(app,"listCaches")).get("codex");set(cache,"rows",sampleSessions);set(cache,"grouped",false);set(cache,"query","");set(cache,"first",0);set(cache,"top",0);call("showTab",new Class[]{String.class},"codex");});
             snapshot("02-chats");
             ui(()->((Button)get(app,"groupButton")).performClick());snapshot("03-projects");
-            ui(()->{Object cache=((Map)get(app,"listCaches")).get("codex");set(cache,"project","D:/work/design-system");set(cache,"grouped",false);call("showSessions",new Class[]{cache.getClass()},cache);require(((ListView)get(app,"sessionList")).getAdapter().getCount()==3,"project filter");});
+            ui(()->{Object cache=((Map)get(app,"listCaches")).get("codex");set(cache,"project","D:/work/design-system");set(cache,"grouped",false);call("showSessions",new Class[]{cache.getClass()},cache);require(((ListView)get(app,"sessionList")).getAdapter().getCount()==4,"project filter keeps the three design-system sessions plus the archive entry");});
             ui(()->{Object cache=((Map)get(app,"listCaches")).get("codex");set(cache,"project","");call("showSessions",new Class[]{cache.getClass()},cache);});
             ui(()->{Object chat=fresh("ChatCache");set(chat,"page",samplePage);((Map)get(app,"chatCaches")).put("codex:preview-0",chat);call("openSession",new Class[]{String.class,String.class},"preview-0",titles[0]);((ListView)get(app,"messageList")).setSelection(0);});
             ui(()->{require(!((Button)get(app,"sendButton")).isEnabled(),"empty composer disabled");((EditText)get(app,"composer")).setText("继续优化间距");require(((Button)get(app,"sendButton")).isEnabled(),"nonempty composer enabled");});

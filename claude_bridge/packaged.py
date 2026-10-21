@@ -189,9 +189,15 @@ class Controller:
                     outcome.update({key: body[key] for key in ('model', 'effort') if key in body})
                 if action == 'access' and not rejected: outcome['mode'] = body['mode']
                 if action in ('settings', 'access') and not rejected:
-                    observed = await self.session(sid)
                     expected = {key: body[key] for key in ('model', 'effort') if key in body} if action == 'settings' else {'permissionMode': body['mode']}
-                    actual = {key: observed.get(key) for key in expected}
+                    actual = None
+                    # Desktop can report the previous value for a moment after a
+                    # successful write, so read back twice before calling it a failure.
+                    for attempt in range(2):
+                        observed = await self.session(sid)
+                        actual = {key: observed.get(key) for key in expected}
+                        if actual == expected: break
+                        await asyncio.sleep(0.4)
                     if actual != expected:
                         outcome.update(status='rejected', message='桌面保存的设置与所选值不同，请刷新选项后检查', actual=actual)
             except BridgeUnavailable:

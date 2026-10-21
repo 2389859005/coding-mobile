@@ -46,3 +46,12 @@ node_modules/
 Thumbs.db
 *.swp
 *~
+
+# 宠物美术的参考素材。下载来的原图只用于本地提取调色板与轮廓，
+# 成品已经编码进 PetSprite.java，仓库里不保留第三方位图。
+线条小狗/
+
+# 提取管线的中间产物
+.local/_ref/
+.local/_ref2/
+tools/ui-checks/.build/

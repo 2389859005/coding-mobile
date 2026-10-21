@@ -21,7 +21,7 @@ final class SessionPage {
             return true;
         }
         boolean imageStep(){String name=title.toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z0-9]","");return kind.equals("image")||name.contains("imageview")||name.contains("viewimage");}
-        boolean groupable(){return activity()&&!imageStep();}
+        boolean groupable(){return activity()&&!imageStep()&&!kind.equals("code");}
         String label(){
             if(!title.isEmpty())return title;
             if(role.equals("reasoning")||role.equals("thought")||role.equals("analysis"))return "思考摘要";
@@ -40,14 +40,14 @@ final class SessionPage {
     }
     final ArrayList<Row> rows=new ArrayList<>();
     final ArrayList<Permission> permissions=new ArrayList<>();
-    String completed=""; String revision,meta,notice,cwd,model,effort,title,permissionMode; JSONObject source,changes,contextUsage; JSONArray steps; int turns;
+    String completed=""; String token=""; String projectCwd=""; String revision,meta,notice,cwd,model,effort,title,permissionMode; JSONObject source,changes,contextUsage; JSONArray steps; int turns;
     boolean running,hasEarlier,hasLater,connected;
     int before,total;
 
     static SessionPage prepare(JSONObject value)throws Exception {
-        SessionPage page=new SessionPage();page.source=value;JSONObject s=value.getJSONObject("session");page.turns=s.optInt("turnCount");page.completed=s.optString("completedTurnId",s.optString("turnId",""));page.title=s.optString("title");page.effort=s.optString("effort","");page.changes=value.optJSONObject("changes");page.steps=value.optJSONArray("steps");
+        SessionPage page=new SessionPage();page.source=value;JSONObject s=value.getJSONObject("session");page.turns=s.optInt("turnCount");page.token=value.optString("token","");page.completed=s.optString("completedTurnId",s.optString("turnId",""));page.title=s.optString("title");page.effort=s.optString("effort","");page.changes=value.optJSONObject("changes");page.steps=value.optJSONArray("steps");
         String state=s.optString("status","idle");page.running=state.equals("active")||state.equals("inProgress")||state.equals("running");
-        page.cwd=s.optString("cwd","");page.model=s.isNull("model")?"":s.optString("model","");page.connected=value.optBoolean("connected",false);
+        page.cwd=s.optString("cwd","");page.projectCwd=s.optString("projectCwd","");page.model=s.isNull("model")?"":s.optString("model","");page.connected=value.optBoolean("connected",false);
         page.permissionMode=s.isNull("permissionMode")?"":s.optString("permissionMode","");
         page.contextUsage=s.optJSONObject("contextUsage");
         page.meta=(page.running?"正在执行":"等待新消息");

@@ -5,6 +5,7 @@ import socket
 import struct
 import tempfile
 import threading
+import time
 import types
 import unittest
 import uuid
@@ -66,22 +67,84 @@ class DualConnectionTests(unittest.TestCase):
 
 
 class ApplicationTests(unittest.TestCase):
+    def test_a_dropped_temporary_route_keeps_paired_credentials(self):
+        # A tunnel process dying on its own must not invalidate a 24h credential.
+        with tempfile.TemporaryDirectory() as d:
+            p=Pairing(d)
+            code=json.loads(p.issue('https://fixture.trycloudflare.com'))
+            credential=p.pair(code['token'],'phone','local')
+            p.retain_temporary('https://fixture.trycloudflare.com')
+            self.assertTrue(p.authenticate(credential['token']))
+            self.assertEqual(p.list_devices()[0]['mode'],'temporary')
+            p.close_temporary('https://fixture.trycloudflare.com')
+            self.assertIsNone(p.authenticate(credential['token']),'closing the connection still revokes it')
+    def test_packaged_activation_id_is_resolved_then_cached(self):
+        from coding_remote import apps
+        apps._package_cache.clear()
+        with patch('coding_remote.apps.subprocess.run',return_value=types.SimpleNamespace(stdout='OpenAI.Codex_9zz!App\n',returncode=0)) as run:
+            self.assertEqual(apps.package_aumid('codex'),'OpenAI.Codex_9zz!App')
+            self.assertEqual(apps.package_aumid('codex'),'OpenAI.Codex_9zz!App')
+            self.assertEqual(run.call_count,1,'the resolved id is cached')
+        apps._package_cache.clear()
+        with patch('coding_remote.apps.subprocess.run',return_value=types.SimpleNamespace(stdout='',returncode=1)):
+            self.assertEqual(apps.package_aumid('codex'),apps.PACKAGE_APP['codex'],'an unresolvable package keeps the pinned fallback')
+        apps._package_cache.clear()
+    def test_application_snapshot_survives_a_broken_client_state(self):
+        # One client without an IPC object used to fail the whole control panel.
+        with tempfile.TemporaryDirectory() as d,patch('coding_remote.apps.processes',return_value=[]):
+            app=self.app(d)
+            app.codex=types.SimpleNamespace()
+            app.desktop=types.SimpleNamespace(connected=False)
+            snapshot=app.snapshot()
+            clients=[row for row in snapshot['apps'] if row['id']!='assistant']
+            self.assertEqual([row['id'] for row in clients],['claude','codex','deepseek'])
+            self.assertFalse(any(row['connected'] for row in clients))
+            self.assertEqual(snapshot['apps'][-1]['id'],'assistant')
+            self.assertTrue(snapshot['apps'][-1]['running'])
+            app.close()
+    def test_monitor_never_blocks_a_phone_action_on_its_lock(self):
+        with tempfile.TemporaryDirectory() as d:
+            app=self.app(d)
+            runs=[]
+            app.inject=lambda:runs.append(1)
+            app.lock.acquire()
+            thread=threading.Thread(target=app.monitor,daemon=True);app.wake.set();thread.start()
+            time.sleep(.3)
+            self.assertTrue(thread.is_alive())
+            self.assertEqual(runs,[],'injection must not start while a phone action owns the lock')
+            app.lock.release();app.close()
     def test_codex_start_activates_existing_desktop_and_connects(self):
         row={'ProcessId':42,'ExecutablePath':'C:/WindowsApps/OpenAI.Codex/app/ChatGPT.exe'}
-        with tempfile.TemporaryDirectory() as d,patch('coding_remote.apps.main_processes',return_value=[row]),patch('coding_remote.apps.os.startfile') as activate:
+        aumid='OpenAI.Codex_2p2nqsd0c76g0!App'
+        with tempfile.TemporaryDirectory() as d,patch('coding_remote.apps.main_processes',return_value=[row]),patch('coding_remote.apps.package_aumid',return_value=aumid),patch('coding_remote.apps.os.startfile') as activate:
             app=self.app(d);app.codex=MagicMock()
             self.assertTrue(app.execute('codex','start')['connected'])
-            activate.assert_called_once_with('shell:AppsFolder\\OpenAI.Codex_2p2nqsd0c76g0!App')
+            activate.assert_called_once_with('shell:AppsFolder\\'+aumid)
             app.codex.ipc.connect.assert_called_once();app.close()
 
     def test_codex_restart_closes_old_pid_and_activates_packaged_app(self):
         row={'ProcessId':42,'ExecutablePath':'C:/WindowsApps/OpenAI.Codex/app/ChatGPT.exe'}
         new={**row,'ProcessId':43}
-        with tempfile.TemporaryDirectory() as d,patch('coding_remote.apps.main_processes',side_effect=[[row],[],[new],[new]]),patch('coding_remote.apps.close_process') as close,patch('coding_remote.apps.os.startfile') as activate,patch('coding_remote.apps.time.sleep'):
+        aumid='OpenAI.Codex_2p2nqsd0c76g0!App'
+        state={'rows':[row]}
+        def main_rows(app_id,fresh=False):return list(state['rows'])
+        def kill(pid):state['rows']=[item for item in state['rows'] if item['ProcessId']!=pid]
+        def activate_effect(*args):state['rows']=[new]
+        with tempfile.TemporaryDirectory() as d,patch('coding_remote.apps.main_processes',side_effect=main_rows),patch('coding_remote.apps.processes',return_value=[]),patch('coding_remote.apps.package_aumid',return_value=aumid),patch('coding_remote.apps.close_process',side_effect=kill) as close,patch('coding_remote.apps.os.startfile',side_effect=activate_effect) as activate,patch('coding_remote.apps.time.sleep'):
             app=self.app(d);app.codex=MagicMock();app.codex.ipc.connect.side_effect=RuntimeError('handshake failed')
             result=app.execute('codex','restart',True)
-            close.assert_called_once_with(42);activate.assert_called_once();app.codex.ipc.close.assert_called_once()
+            close.assert_called_with(42);activate.assert_called_with('shell:AppsFolder\\'+aumid);app.codex.ipc.close.assert_called_once()
             self.assertFalse(result['connected']);self.assertIn('handshake failed',result['message']);app.close()
+    def test_stop_also_ends_packaged_helper_children(self):
+        main={'ProcessId':42,'ExecutablePath':'C:/WindowsApps/OpenAI.Codex/app/ChatGPT.exe','CommandLine':'ChatGPT.exe'}
+        helper={'ProcessId':43,'ExecutablePath':'C:/WindowsApps/OpenAI.Codex/app/ChatGPT.exe','CommandLine':'ChatGPT.exe --type=renderer'}
+        ended=[]
+        def live():return [row for row in (main,helper) if row['ProcessId'] not in ended]
+        with tempfile.TemporaryDirectory() as d,patch('coding_remote.apps.processes',side_effect=lambda fresh=False:live()),patch('coding_remote.apps.close_process',side_effect=ended.append),patch('coding_remote.apps.time.sleep'):
+            app=self.app(d)
+            self.assertEqual(app.execute('codex','stop',True)['status'],'accepted')
+            self.assertEqual(ended,[42,43],'a surviving renderer can bring the client back')
+            app.close()
 
     def test_codex_list_does_not_confuse_database_with_connection(self):
         with tempfile.TemporaryDirectory() as d:

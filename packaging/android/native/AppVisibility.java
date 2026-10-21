@@ -14,7 +14,7 @@ public final class AppVisibility extends Application implements Application.Acti
     static boolean visible(){return visible;}
     static void add(Runnable listener){listeners.add(listener);}
     static void remove(Runnable listener){listeners.remove(listener);}
-    private void changed(boolean value){if(visible==value)return;visible=value;if(value){NotificationManager manager=(NotificationManager)getSystemService(NOTIFICATION_SERVICE);for(android.service.notification.StatusBarNotification item:manager.getActiveNotifications())if("completion_v2".equals(item.getNotification().getChannelId()))manager.cancel(item.getTag(),item.getId());}for(Runnable listener:new ArrayList<>(listeners))listener.run();}
+    private void changed(boolean value){if(visible==value)return;visible=value;if(value){NotificationManager manager=(NotificationManager)getSystemService(NOTIFICATION_SERVICE);for(android.service.notification.StatusBarNotification item:manager.getActiveNotifications()){String channel=item.getNotification().getChannelId();if("completion_v2".equals(channel)||"attention_v1".equals(channel))manager.cancel(item.getTag(),item.getId());}}for(Runnable listener:new ArrayList<>(listeners))listener.run();}
     @Override public void onCreate(){super.onCreate();registerActivityLifecycleCallbacks(this);}
     public void onActivityStarted(Activity activity){main.removeCallbacks(hidden);started.add(activity);changed(true);}
     public void onActivityStopped(Activity activity){started.remove(activity);if(started.isEmpty())main.postDelayed(hidden,200);}

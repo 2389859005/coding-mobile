@@ -20,7 +20,7 @@ coding远程是一款连接 Windows 桌面 AI 编程客户端与 Android 手机�
 | 执行过程 | 查看可折叠的任务步骤、代码变化、Markdown 和 diff；长按消息可复制、选择部分文字、引用或分享。 |
 | Git 操作 | 从会话向右滑动进入仓库页面，查看差异与提交图，暂存、提交、获取、仅快进拉取、推送及管理分支。 |
 | 文件与图片 | 浏览工作目录，预览图片、PDF、Markdown、文本和离线 HTML；单次最多附加四张图片。 |
-| 状态与提醒 | 发送按钮显示可信的上下文用量；支持任务完成通知，以及显示执行、待审批和待回答状态的悬浮窗。 |
+| 状态与提醒 | 发送按钮显示可信的上下文用量；支持任务完成通知，以及以桌面宠物形式显示执行、待审批和待回答状态的悬浮窗，六种形象可选。 |
 | 界面偏好 | 提供七种主题、页面显隐设置、会话缓存、阅读位置保持和可移动的顶部／最新消息按钮。 |
 
 ### 界面示例
@@ -52,8 +52,8 @@ coding远程是一款连接 Windows 桌面 AI 编程客户端与 Android 手机�
 
 | 平台 | 本地构建文件 | 要求 |
 | --- | --- | --- |
-| Windows | `dist/CodingRemoteAssistant-Windows-2.0.11.exe` | x64；已安装并登录至少一个支持的桌面客户端；安装包自带 Python 运行时。 |
-| Android | `dist/CodingRemoteAssistant-Android-2.0.11.apk` | Android 8.0+；ARM64 或 x86_64。 |
+| Windows | `dist/CodingRemoteAssistant-Windows-2.1.1.exe` | x64；已安装并登录至少一个支持的桌面客户端；安装包自带 Python 运行时。 |
+| Android | `dist/CodingRemoteAssistant-Android-2.1.1.apk` | Android 8.0+；ARM64 或 x86_64。 |
 
 1. 在 Windows 上打开所需客户端，再运行助手。
 2. 选择默认的 **临时扫码连接**，等待生成二维码。

@@ -133,6 +133,10 @@ class SessionStore:
         receipts = []
         with path.open(encoding='utf-8') as stream:
             for line in stream:
+                # A transcript tail-cursor skips everything that cannot be a user
+                # response before spending a json.loads on it.
+                if '"response_item"' not in line:
+                    continue
                 try:
                     record = json.loads(line)
                     payload = record.get('payload', {})

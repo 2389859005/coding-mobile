@@ -7,15 +7,28 @@ import sys
 import time
 
 
+def _env_dir(name):
+    """Path from an environment variable, with a clear error when it is unset.
+
+    A bare os.environ[...] on a stripped-down process raised KeyError before any
+    useful message, and on a redirected profile the variable can genuinely be
+    missing.
+    """
+    value = os.environ.get(name)
+    if not value:
+        raise RuntimeError('环境变量 %s 未设置，无法定位 Claude 配置目录' % name)
+    return Path(value)
+
+
 def enable_devtools(executable):
     """Change only the documented developer setting, preserving other settings."""
     executable = Path(executable)
     if 'WindowsApps' in executable.parts:
         package = next(p for p in executable.parts if p.startswith('Claude_'))
         family = 'Claude_' + package.rsplit('__', 1)[-1]
-        directory = Path(os.environ['LOCALAPPDATA'])/'Packages'/family/'LocalCache/Roaming/Claude'
+        directory = _env_dir('LOCALAPPDATA')/'Packages'/family/'LocalCache/Roaming/Claude'
     else:
-        directory = Path(os.environ['APPDATA'])/'Claude'
+        directory = _env_dir('APPDATA')/'Claude'
     directory.mkdir(parents=True, exist_ok=True)
     path = directory/'developer_settings.json'
     value = json.loads(path.read_text('utf-8-sig')) if path.exists() else {}

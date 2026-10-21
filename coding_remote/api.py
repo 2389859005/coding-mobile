@@ -12,6 +12,7 @@ from .native_content import codex_messages, fenced_messages
 from .native_features import NativeFeatures
 from .conversation import summarize, codex_response
 from .deepseek import DeepSeek
+from . import VERSION
 
 
 def message_window(value, before=None, limit=60):
@@ -24,6 +25,10 @@ def message_window(value, before=None, limit=60):
     for index, message in enumerate(fenced_messages(value.get('messages',[]))):
         text = str(message.get('text') or '')
         # Split by code points, so UTF-16 surrogate pairs are never broken on Android.
+        if len(text) <= 3000:
+            chunks.append({**message, 'id':str(message.get('id') or index)+':0',
+                           'role':message.get('role','activity'),'text':text,'continuation':False})
+            continue
         for part, offset in enumerate(range(0,len(text),3000)):
             chunks.append({**message, 'id':str(message.get('id') or index)+':'+str(part),
                            'role':message.get('role','activity'),'text':text[offset:offset+3000],
@@ -82,6 +87,10 @@ class NativeServer(ThreadingHTTPServer):
         self.hosts.add(urlsplit(origin).netloc)
 
     def dispatch(self, backend, sid, action, body):
+        if sid and action:
+            # A write invalidates the short detail cache, so the read that follows
+            # it shows the new state instead of the previous poll's answer.
+            self.features.forget_detail(backend, sid)
         if backend == 'deepseek':
             if not action:return self.deepseek.call('detail' if sid else 'list',sid)
             if action=='open':return self.deepseek.call(action,sid)
@@ -113,11 +122,15 @@ class NativeServer(ThreadingHTTPServer):
                 self.bridge.ipc.connect()
                 connected=bool(self.bridge.ipc.client_id and self.bridge.ipc.socket)
             except Exception as exc:connection_error=str(exc)[:200]
-            rows = self.bridge.list(query='',limit=1000,offset=0,archived=False,working=False)
+            # Three passes for the session list, in increasing cost order: the archive
+            # pass must run before the working scan is even possible (archived rows are
+            # excluded from the unarchived listing), and the working scan reads every
+            # thread's rollout tail, so it stays last and runs once.
+            rows=self.bridge.list(query='',limit=1000,offset=0,archived=False,working=False)
             archived_rows=self.bridge.list(query='',limit=1000,offset=0,archived=True,working=False)
             known={r['id'] for r in rows}
             rows=[{**r,'archived':False} for r in rows]+[{**r,'archived':True} for r in archived_rows if r['id'] not in known]
-            active = {r['id'] for r in self.bridge.list(query='',limit=1000,offset=0,archived=False,working=True)}
+            active={r['id'] for r in self.bridge.list(query='',limit=1000,offset=0,archived=False,working=True)}
             return {'connected':connected,'connectionError':connection_error,'sessions':[{'id':r['id'],'title':r.get('name') or r.get('title') or '未命名会话',
                                   'cwd':r.get('cwd',''),'archived':r['archived'],'status':'active' if r['id'] in active else 'idle','backend':'codex',
                                   'updatedAt':r.get('recency_at_ms') or r.get('updated_at_ms') or r.get('updated_at',0)} for r in rows if r.get('host','local')=='local']}
@@ -212,6 +225,12 @@ class NativeServer(ThreadingHTTPServer):
 
 
 class Handler(BaseHTTPRequestHandler):
+    # Keep-alive: the phone reuses one tunnel connection instead of paying a
+    # fresh TCP/TLS handshake (and a possible stale-route failure) per poll.
+    protocol_version='HTTP/1.1'
+    # Also the idle keep-alive window; a stalled client cannot pin a thread forever.
+    timeout=120
+
     def log_message(self, *args):
         pass  # Never log pairing secrets or Authorization headers.
 
@@ -221,6 +240,11 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Content-Type','application/json; charset=utf-8')
         self.send_header('Cache-Control','no-store')
         self.send_header('Content-Length',str(len(body)))
+        if status>=400:
+            # A rejected request may carry an unread body; it must not be parsed
+            # as the next pipelined request on this connection.
+            self.send_header('Connection','close')
+            self.close_connection=True
         self.end_headers();self.wfile.write(body)
 
     def do_GET(self): self.handle_api(False)
@@ -239,7 +263,6 @@ class Handler(BaseHTTPRequestHandler):
             path=urlsplit(self.path).path
             body={}
             if write:
-                self.connection.settimeout(10)
                 length=self.headers.get('Content-Length','')
                 if self.headers.get('Transfer-Encoding') or not length.isdigit() or not 0<int(length)<=5*1024*1024:
                     raise ValueError('请求长度无效')
@@ -253,7 +276,7 @@ class Handler(BaseHTTPRequestHandler):
             device=self.server.pairing.authenticate(header[7:] if header.startswith('Bearer ') else '')
             if not device:raise APIError(401,'连接已失效，请重新扫码')
             if path=='/api/device' and not write:
-                return self.output(200,{'name':'coding远程','version':'2.0.11','device':device['name'],'computerId':self.server.pairing.computer_id,'mode':device.get('mode','permanent'),'claudeConnected':self.server.claude.desktop.connected})
+                return self.output(200,{'name':'coding远程','version':VERSION,'device':device['name'],'computerId':self.server.pairing.computer_id,'mode':device.get('mode','permanent'),'claudeConnected':self.server.claude.desktop.connected})
             if path=='/api/apps' and not write:
                 if self.server.apps is None:raise APIError(503,'应用控制尚未准备好')
                 return self.output(200,self.server.apps.snapshot())
@@ -269,16 +292,29 @@ class Handler(BaseHTTPRequestHandler):
                 raise APIError(404,'接口不存在')
             backend=parts[2];sid=parts[3] if len(parts)>3 else None;action=parts[4] if len(parts)>4 else None
             if backend not in ('claude','codex','deepseek'):raise APIError(404,'页面不存在')
+            # Parsed once: the poll below re-read the same query string for the
+            # history cursor, the `known` token and the queue listing.
             query=parse_qs(urlsplit(self.path).query)
             features=self.server.features
-            if sid and action=='git':return self.output(200,features.git(backend,sid,query,body if write else None))
+            # These routes answer without going through dispatch(), so they have to
+            # invalidate the session's cached reads themselves: otherwise a write
+            # followed immediately by a poll could be answered from the pre-write
+            # snapshot and look as if the upload or the enqueue never happened.
+            if sid and action=='git':
+                result=features.git(backend,sid,query,body if write else None)
+                if write:features.forget_detail(backend,sid)
+                return self.output(200,result)
             if sid and action=='queue':
                 result=self.server.queue.request(backend,sid,body) if write else {'items':self.server.queue.listing(backend,sid)}
+                if write:features.forget_detail(backend,sid)
                 return self.output(200,result)
             if sid=='projects' and not write and not action:return self.output(200,features.projects(backend))
             if sid=='create' and write and not action:return self.output(200,features.create(backend,body))
             if sid=='creation' and not write and action:return self.output(200,features.creation(backend,action))
-            if sid and action=='upload' and write:return self.output(200,features.upload(backend,sid,body))
+            if sid and action=='upload' and write:
+                result=features.upload(backend,sid,body)
+                features.forget_detail(backend,sid)
+                return self.output(200,result)
             if sid and not write and action in ('access','files','file','agents','catalog'):
                 if action=='access':result=features.access(backend,sid)
                 elif action=='files':result=features.files(backend,sid,query)
@@ -288,14 +324,19 @@ class Handler(BaseHTTPRequestHandler):
                 else:result={'agents':[]}
                 return self.output(200,result)
             if write != bool(action):raise APIError(405,'请求方法不支持')
+            if sid and not action and backend in ('claude','deepseek'):
+                # An idle conversation that has not changed since the last poll is
+                # answered without reading its transcript again.
+                answer=self.server.features.unchanged_answer(backend,sid,query.get('known',[''])[0])
+                if answer is not None:return self.output(200,answer)
             if backend in ('claude','deepseek') and action=='send':
                 # Resolve staged image IDs only after authentication and session scoping.
                 body={**body,'resolvedImages':features.images(backend,sid,body.get('images',[]))}
             result=self.server.dispatch(backend,sid,action,body)
             if sid and not action:
-                query=parse_qs(urlsplit(self.path).query)
                 result=message_window(result,query.get('before',[None])[0],query.get('limit',[60])[0])
                 result['queue']=self.server.queue.listing(backend,sid)
+                if backend in ('claude','deepseek'):result['token']=self.server.features.activity_token(backend,sid)
             return self.output(200,result)
         except APIError as exc:self.output(exc.status,{'error':str(exc)})
         except PermissionError as exc:

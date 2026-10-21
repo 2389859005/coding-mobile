@@ -76,8 +76,8 @@ def build_in(work, source=None):
 </resources>''',encoding='utf-8')
     (decoded/'res/layout/activity_main.xml').write_text('<?xml version="1.0" encoding="utf-8"?><FrameLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent"/>',encoding='utf-8')
     yml=decoded/'apktool.yml';metadata=yml.read_text('utf-8')
-    metadata=re.sub(r'(?m)^(\s*versionCode:).*$',r'\g<1> 20000011',metadata)
-    metadata=re.sub(r'(?m)^(\s*versionName:).*$',r'\g<1> 2.0.11',metadata)
+    metadata=re.sub(r'(?m)^(\s*versionCode:).*$',r'\g<1> 21010000',metadata)
+    metadata=re.sub(r'(?m)^(\s*versionName:).*$',r'\g<1> 2.1.1',metadata)
     yml.write_text(metadata,encoding='utf-8')
     run(java,'-jar',ROOT/'.local/build-tools/apktool.jar','b',decoded,'-o',work/'base.apk')
     run(java.with_name('javac.exe'),'-encoding','UTF-8','-source','8','-target','8','-classpath',android,'-d',classes,*sorted((ROOT/'packaging/android/native').glob('*.java')))
@@ -91,7 +91,7 @@ def build_in(work, source=None):
         dst.write(ROOT/'packaging/tailnet/THIRD_PARTY_NOTICES.txt','assets/TAILNET_NOTICES.txt')
         dst.write(ROOT/'packaging/android/assets/NOTICE.md','assets/PRODUCT_ICON_NOTICE.txt')
     run(bt/'zipalign.exe','-f','-p','4',work/'unsigned.apk',work/'aligned.apk')
-    target=work/'CodingRemoteAssistant-Android-2.0.11.apk'
+    target=work/'CodingRemoteAssistant-Android-2.1.1.apk'
     run(bt/'apksigner.bat','sign','--v4-signing-enabled','false','--ks',ROOT/'.local/signing/claude-adapter.p12','--ks-key-alias','claude-adapter','--ks-pass','file:'+str(ROOT/'.local/signing/password.txt'),'--out',target,work/'aligned.apk')
     run(bt/'apksigner.bat','verify','--verbose',target);run(bt/'zipalign.exe','-c','-p','4',target)
     output=ROOT/'dist'/target.name;output.parent.mkdir(exist_ok=True);target.replace(output)

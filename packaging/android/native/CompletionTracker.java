@@ -3,7 +3,8 @@ package io.github.abyxs.codingremote;
 import org.json.*;
 import java.util.ArrayList;
 
-/** Remembers observed execution. Missing/offline tasks never count as completed. */
+/** Remembers observed execution. Only an observed run can finish; desktop-side
+ * edits (a rename, a new turn started elsewhere) never become a false alarm. */
 final class CompletionTracker {
     private final JSONObject active;
     CompletionTracker(String saved){JSONObject parsed;try{parsed=new JSONObject(saved);}catch(Exception e){parsed=new JSONObject();}active=parsed;}
@@ -13,9 +14,11 @@ final class CompletionTracker {
         for(int i=0;i<rows.length();i++){JSONObject task=rows.optJSONObject(i);if(task==null)continue;String backend=task.optString("backend"),key=backend+":"+task.optString("id"),state=task.optString("status");boolean offline=false;if(unavailable!=null)for(int j=0;j<unavailable.length();j++)if(backend.equals(unavailable.optString(j)))offline=true;if(offline)continue;
             boolean running=state.equals("active")||state.equals("running")||state.equals("inProgress")||state.equals("working");
             boolean terminal=state.equals("idle")||state.equals("completed")||state.equals("complete")||state.equals("failed")||state.equals("error")||state.equals("interrupted");
-            String stamp=task.optString("token",task.optString("turnId",task.optString("updatedAt","")));boolean changed=!stamp.isEmpty()&&!stamp.equals(known.optString(key));
+            String stamp=task.optString("token",task.optString("turnId",task.optString("updatedAt","")));
             JSONArray attention=task.optJSONArray("attention"),requests=task.optJSONArray("requests");boolean waiting=attention!=null&&attention.length()>0||requests!=null&&requests.length()>0;
-            if(running||waiting)active.put(key,System.currentTimeMillis());else if(terminal&&(active.has(key)||initialized.optBoolean(backend)&&changed)){finished.add(task);active.remove(key);}if(!stamp.isEmpty())known.put(key,stamp);available.add(backend);
+            // Only a task this device actually saw running or waiting can finish.
+            boolean observed=active.has(key);
+            if(running||waiting)active.put(key,System.currentTimeMillis());else if(terminal&&observed){finished.add(task);active.remove(key);}if(!stamp.isEmpty())known.put(key,stamp);available.add(backend);
         }
         // Expire abandoned observations rather than retaining arbitrary task history forever.
         for(String backend:available)initialized.put(backend,true);
