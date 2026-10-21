@@ -4,6 +4,15 @@
 
 ## 2.1.1 · Windows / Android
 
+**已发布**：安装包见 [v2.1.1 Release](https://github.com/2389859005/coding-mobile/releases/tag/v2.1.1)。
+
+| 平台 | 文件 | SHA-256 |
+| --- | --- | --- |
+| Windows | `CodingRemoteAssistant-Windows-2.1.1.exe` | `d28a1408e7b4989a0299d58e2d77cd9d429e48de9787f39334f0a35ccd06988b` |
+| Android | `CodingRemoteAssistant-Android-2.1.1.apk` | `07c51461442c573910f05014fd6ff6f049010337742d30d56df69d468385ae98` |
+
+Android 包内版本 `versionName` 2.1.1 / `versionCode` 21010000，签名与 2.1.0 相同，可覆盖安装保留绑定。
+
 **并发与数据安全**
 
 - **队列连接**：`TaskQueue` 改用单一 `check_same_thread=False` 连接并让所有读-改-提交都落在同一把锁内，跨线程提交不再相互截断。新增 `dispatch_lock` 串行化「选定队首→标记发送→派发」整段，`sendnow` 与后台轮询不再可能同时发出两条消息。
