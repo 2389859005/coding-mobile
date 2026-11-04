@@ -254,6 +254,57 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection=True
         self.end_headers();self.wfile.write(body)
 
+    def event(self, value=None, comment=None):
+        """Write one SSE frame and flush it through the tunnel immediately."""
+        if comment is not None:self.wfile.write((': '+str(comment)+'\n').encode())
+        if value is not None:
+            data=json.dumps(value,ensure_ascii=False,separators=(',',':')).splitlines() or ['']
+            self.wfile.write(b'event: snapshot\n')
+            for line in data:self.wfile.write(('data: '+line+'\n').encode())
+        self.wfile.write(b'\n');self.wfile.flush()
+
+    def stream_snapshot(self, backend, sid, query):
+        result=self.server.dispatch(backend,sid,None,{})
+        result=message_window(result,query.get('limit',['60'])[0])
+        result['queue']=self.server.queue.listing(backend,sid)
+        result['token']=self.server.features.stream_token(backend,sid)
+        return result
+
+    def event_stream(self, backend, sid, query):
+        """Keep one authenticated response open and push changed session pages."""
+        known=query.get('known',[''])[0]
+        self.send_response(200)
+        self.send_header('Content-Type','text/event-stream; charset=utf-8')
+        self.send_header('Cache-Control','no-cache, no-store, must-revalidate')
+        self.send_header('Connection','keep-alive')
+        self.send_header('X-Accel-Buffering','no')
+        self.end_headers()
+        self.close_connection=False
+        try:
+            current=self.server.features.stream_token(backend,sid)
+            if not known or known!=current:self.event(self.stream_snapshot(backend,sid,query))
+            else:self.event(comment='connected')
+            heartbeat=time.monotonic()+12
+            while True:
+                time.sleep(.25)
+                current=self.server.features.stream_token(backend,sid)
+                if current!=known:
+                    payload=self.stream_snapshot(backend,sid,query)
+                    known=payload.get('token',current)
+                    self.event(payload);heartbeat=time.monotonic()+12
+                elif time.monotonic()>=heartbeat:
+                    self.event(comment='keep-alive');heartbeat=time.monotonic()+12
+        except (BrokenPipeError,ConnectionResetError,TimeoutError,OSError):
+            return
+        except Exception:
+            logging.exception('Native event stream stopped')
+        finally:
+            # Do not let BaseHTTPRequestHandler wait for another HTTP request
+            # after the one-way stream has ended; a mobile client normally closes
+            # the socket by cancelling the response.
+            self.close_connection=True
+
+
     def do_GET(self): self.handle_api(False)
     def do_POST(self): self.handle_api(True)
 
@@ -303,6 +354,8 @@ class Handler(BaseHTTPRequestHandler):
             # history cursor, the `known` token and the queue listing.
             query=parse_qs(urlsplit(self.path).query)
             features=self.server.features
+            if sid and not write and action=='events':
+                return self.event_stream(backend,sid,query)
             # These routes answer without going through dispatch(), so they have to
             # invalidate the session's cached reads themselves: otherwise a write
             # followed immediately by a poll could be answered from the pre-write
@@ -353,7 +406,7 @@ class Handler(BaseHTTPRequestHandler):
             if sid and not action:
                 result=message_window(result,query.get('before',[None])[0],query.get('limit',[60])[0])
                 result['queue']=self.server.queue.listing(backend,sid)
-                if backend in ('claude','deepseek'):result['token']=self.server.features.activity_token(backend,sid)
+                if backend in ('claude','deepseek','codex'):result['token']=self.server.features.stream_token(backend,sid)
             return self.output(200,result)
         except APIError as exc:self.output(exc.status,{'error':str(exc)})
         except PermissionError as exc:

@@ -401,6 +401,33 @@ class NativeFeatures:
                 'session':self.session_row(backend, sid),
                 'queue':self.server.queue.listing(backend, sid)}
 
+    def stream_token(self, backend, sid):
+        """Cheap change token for the persistent conversation event stream.
+
+        ``activity_token`` deliberately becomes empty while a turn is running so
+        legacy polls read a fresh transcript. A stream can afford a finer token:
+        the Codex rollout stat and cached message revision catch new assistant
+        output, while the metadata fields cover status, turns and approvals for all
+        providers. Queue contents are included because queue writes do not change a
+        desktop session row.
+        """
+        row = self.session_row(backend, sid) or {}
+        requests = row.get('requests') or []
+        value = {
+            'status': row.get('status'),
+            'updatedAt': row.get('updatedAt'),
+            'turnId': row.get('turnId'),
+            'completedTurnId': row.get('completedTurnId'),
+            'turnCount': row.get('turnCount'),
+            'requests': [str(item.get('id')) for item in requests if isinstance(item, dict)],
+            'connected': row.get('connected'),
+            'queue': self.server.queue.listing(backend, sid),
+        }
+        if backend == 'codex':
+            try: value['messageRevision'] = self.codex_message_revision(sid)
+            except (AttributeError, OSError, KeyError, TypeError, ValueError): value['messageRevision'] = ''
+        return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()
+
     def files(self, backend, sid, query):
         row = self.session_row(backend, sid)
         requested = query.get('path', [''])[0]

@@ -63,6 +63,7 @@ public final class MainActivity extends Activity {
     private boolean compactStatusDock=true;
     private int pollTicket=0,historyTicket=0;
     private final java.util.concurrent.ConcurrentHashMap<Thread,HttpURLConnection> liveConnections=new java.util.concurrent.ConcurrentHashMap<>();
+    private volatile Thread eventThread;
     private final ExecutorService liveWorkers=Executors.newFixedThreadPool(2,r->new Thread(r,"conversation-live"));
     /** Paging back through history is a user-initiated action, so it must not queue
      * behind the 15-second poll. Sharing liveWorkers meant a slow poll could hold
@@ -275,7 +276,7 @@ public final class MainActivity extends Activity {
         if(optionsDismiss!=null){stage.removeView(optionsDismiss);optionsDismiss=null;}if(inlineOptions!=null)stage.removeView(inlineOptions);optionAnchor=null;if(applicationMenu!=null){applicationMenu.dismiss();applicationMenu=null;}queuePanel=null;queuedMessages=new JSONArray();queueExpanded=false;
         if(displayedListKey!=null&&sessionList!=null){ListCache c=listCaches.get(displayedListKey);if(c!=null){c.first=sessionList.getFirstVisiblePosition();c.top=sessionList.getChildCount()>0?sessionList.getChildAt(0).getTop():0;}}
         if(sessionKey!=null){ChatCache c=chatCaches.get(sessionKey);if(c!=null){if(composer!=null)c.draft=composer.getText().toString();if(messageList!=null&&pageBefore==null){c.first=messageList.getFirstVisiblePosition();c.top=messageList.getChildCount()>0?messageList.getChildAt(0).getTop()-messageList.getPaddingTop():0;c.followingLatest=followingLatest;}}}
-        navigationVersion++;selectingText=false;catalogTicket++;selectedModel="";inlineOptions=null;expandedOption="";epoch++;pollTicket++;historyTicket++;pollEpoch=-1;for(HttpURLConnection active:liveConnections.values())active.disconnect();permissionRevision="";taskRevision="";scrolling=false;deferredPage=null;requestedHeader=null;if(questionDialog!=null){questionDialog.dismiss();questionDialog=null;}activeQuestion="";if(nextPoll!=null)handler.removeCallbacks(nextPoll);nextPoll=null;sessionId=null;sessionKey=null;displayedListKey=null;pageBefore=null;historyLoading=false;lastMessages="";
+        navigationVersion++;selectingText=false;catalogTicket++;selectedModel="";inlineOptions=null;expandedOption="";epoch++;pollTicket++;historyTicket++;pollEpoch=-1;for(HttpURLConnection active:liveConnections.values())active.disconnect();eventThread=null;permissionRevision="";taskRevision="";scrolling=false;deferredPage=null;requestedHeader=null;if(questionDialog!=null){questionDialog.dismiss();questionDialog=null;}activeQuestion="";if(nextPoll!=null)handler.removeCallbacks(nextPoll);nextPoll=null;sessionId=null;sessionKey=null;displayedListKey=null;pageBefore=null;historyLoading=false;lastMessages="";
         if(fileBrowser!=null){fileBrowser.close();fileBrowser=null;}fileBrowserKey="";sessionSignature="";withdrawable="";
         // The image picker returns through onActivityResult long after reset(); a
         // stale key would silently drop the user's selection.
@@ -419,6 +420,56 @@ public final class MainActivity extends Activity {
             reusable=true;return result;
         }finally{liveConnections.remove(Thread.currentThread());if(!reusable)c.disconnect();}
     }
+
+    /** Open the one-way event channel used while a conversation is visible. */
+    private HttpURLConnection openEventStream(String address,String credential,String path)throws Exception{
+        if(!TrustedOrigin.valid(address))throw new IOException("连接地址不受支持，请重新扫码绑定");
+        HttpURLConnection c=EmbeddedNetwork.open(this,address+path);c.setConnectTimeout(7000);c.setReadTimeout(0);c.setInstanceFollowRedirects(false);
+        c.setRequestProperty("Accept","text/event-stream");c.setRequestProperty("Accept-Encoding","identity");c.setRequestProperty("Cache-Control","no-cache");c.setRequestProperty("Connection","keep-alive");c.setRequestProperty("Origin",address);if(!credential.isEmpty())c.setRequestProperty("Authorization","Bearer "+credential);
+        int code=c.getResponseCode();if(code>=300){c.disconnect();throw new ApiError(code,"实时通道暂不可用");}return c;
+    }
+
+    /** Start a persistent stream; a failed stream falls back to one normal poll. */
+    private void startEventStream(int generation,String id){
+        if(paused||isDestroyed()||generation!=epoch||id==null)return;
+        Thread previous=eventThread;if(previous!=null&&previous.isAlive())return;
+        final String host=origin,credential=token,kind=backend,key=kind+":"+id,route="/api/native/"+kind+"/"+id+"/events";
+        ChatCache cached=chatCaches.get(key);String known=cached==null||cached.page==null?"":cached.page.token;
+        Thread stream=new Thread(()->{
+            HttpURLConnection connection=null;
+            try{
+                connection=openEventStream(host,credential,route+(known.isEmpty()?"":"?known="+Uri.encode(known)));
+                liveConnections.put(Thread.currentThread(),connection);
+                try(BufferedReader reader=new BufferedReader(new InputStreamReader(connection.getInputStream(),"UTF-8"))){
+                    String line;StringBuilder data=new StringBuilder();
+                    while(!paused&&!isDestroyed()&&generation==epoch&&host.equals(origin)&&credential.equals(token)&&(line=reader.readLine())!=null){
+                        if(line.startsWith("data:")){if(data.length()>0)data.append('\n');data.append(line.substring(5).trim());}
+                        else if(line.isEmpty()&&data.length()>0){JSONObject value=new JSONObject(data.toString());data.setLength(0);applyEventPage(value,generation,id,kind,host,credential,key);}
+                    }
+                    if(data.length()>0)applyEventPage(new JSONObject(data.toString()),generation,id,kind,host,credential,key);
+                }
+            }catch(Exception error){
+                if(!paused&&!isDestroyed()&&generation==epoch&&host.equals(origin)&&credential.equals(token))runOnUiThread(()->{connection("实时通道重连中…",false);schedulePoll(generation,id,500);});
+            }finally{liveConnections.remove(Thread.currentThread());if(connection!=null)connection.disconnect();if(eventThread==Thread.currentThread())eventThread=null;}
+        },"conversation-live");
+        eventThread=stream;stream.start();
+    }
+
+    /** Apply a pushed page on the UI thread, preserving the same cache and identity rules as polling. */
+    private void applyEventPage(JSONObject raw,int generation,String id,String kind,String host,String credential,String key){
+        if(raw==null||raw.optBoolean("unchanged",false))return;
+        try{
+            SessionPage result=SessionPage.prepare(raw);
+            if(!result.revision.equals(writtenRevisions.put(host+key,result.revision)))ConversationCache.write(this,host+credential+key,raw);
+            runOnUiThread(()->{
+                if(isDestroyed()||paused||generation!=epoch||!key.equals(sessionKey)||!host.equals(this.origin)||!credential.equals(this.token)||!kind.equals(backend)||raw.optBoolean("unchanged",false))return;
+                ChatCache cache=chatCaches.get(key);if(cache!=null)cache.page=result;
+                JSONArray queue=raw.optJSONArray("queue");if(queue!=null)queuedMessages=queue;
+                syncIdentity(kind,id,result.title,result.cwd,++identityClock);renderSession(result,false);connection(result.running?"正在思考…":"已同步",result.connected);
+            });
+        }catch(Exception ignored){}
+    }
+
     private void fetch(String path,JSONObject body,int generation,Done done){final String host=origin,credential=token;
         workers.execute(()->{try{JSONObject value=request(host,credential,path,body);runOnUiThread(()->{if(generation!=epoch||isFinishing())return;try{done.accept(value);}catch(Exception e){showError(e);}});}
         catch(Exception e){runOnUiThread(()->{if(generation==epoch&&!isFinishing())showError(e);});}});
@@ -1102,15 +1153,15 @@ public final class MainActivity extends Activity {
                 if(ticket!=pollTicket||isDestroyed()||!host.equals(origin)||!credential.equals(token))return;pollEpoch=-1;if(generation!=epoch)return;
                 JSONObject session=raw.optJSONObject("session");if(session!=null)syncIdentity(backend,id,session.optString("title"),session.optString("cwd"),identityVersion);
                 JSONArray queue=raw.optJSONArray("queue");if(queue!=null)queuedMessages=queue;renderQueue();
-                connection("已同步",true);schedulePoll(generation,id,350);
+                connection("已同步",true);startEventStream(generation,id);
             });return;}
             SessionPage result=SessionPage.prepare(raw);
             if(before==null&&!result.revision.equals(writtenRevisions.put(host+key,result.revision)))ConversationCache.write(this,host+credential+key,raw);
             runOnUiThread(()->{
             if(ticket!=(before==null?pollTicket:historyTicket))return;if(before==null&&pollEpoch==generation)pollEpoch=-1;if(isDestroyed()||!host.equals(origin)||!credential.equals(token))return;
             if(before==null){ChatCache cache=chatCaches.get(key);if(cache!=null)cache.page=result;syncIdentity(key.substring(0,key.indexOf(':')),id,result.title,result.cwd,identityVersion);}
-            if(generation!=epoch)return;if(before==null&&pageBefore!=null){observeCompletion(result);connection(result.running?"正在思考…":"已同步",result.connected);schedulePoll(generation,id,2500);return;}if(!java.util.Objects.equals(before,pageBefore))return;historyLoading=false;
-            renderSession(result,before!=null);schedulePoll(generation,id,result.running?1000:2200);
+            if(generation!=epoch)return;if(before==null&&pageBefore!=null){observeCompletion(result);connection(result.running?"正在思考…":"已同步",result.connected);startEventStream(generation,id);return;}if(!java.util.Objects.equals(before,pageBefore))return;historyLoading=false;
+            renderSession(result,before!=null);if(before==null){startEventStream(generation,id);}else if(eventThread==null||!eventThread.isAlive())schedulePoll(generation,id,result.running?1000:2200);
         });}catch(Exception e){runOnUiThread(()->{if(ticket!=(before==null?pollTicket:historyTicket))return;if(before==null&&pollEpoch==generation)pollEpoch=-1;if(generation!=epoch||isDestroyed()||before!=null&&!java.util.Objects.equals(before,pageBefore))return;historyLoading=false;earlierButton.setEnabled(true);
             if(e instanceof ApiError&&((ApiError)e).code==401){showError(e);return;}
             status.setText(before==null?"连接暂时中断，正在重试…":"历史读取失败，可点击回到最新重试");connection(before==null?"连接中断":"历史读取失败",false);earlierButton.setText("重试读取更早消息");latestButton.setVisibility(View.VISIBLE);
@@ -1831,7 +1882,7 @@ public final class MainActivity extends Activity {
     private void handleNotification(Intent intent){if(intent==null||token.isEmpty())return;String id=intent.getStringExtra("sessionId"),kind=intent.getStringExtra("backend");if(id!=null&&( "codex".equals(kind)||"claude".equals(kind)||"deepseek".equals(kind))){backend=kind;openSession(id,intent.getStringExtra("title"));intent.removeExtra("sessionId");}}
     @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);handleNotification(intent);}
     @Override public void onBackPressed(){if(gitPage!=null){closeGit();return;}if(!expandedOption.isEmpty()){closeOptions();return;}if(sessionId!=null){showTab(backend);return;}if(backend.equals("settings")){showTab(settingsReturn);return;}if(!token.isEmpty()&&!backend.equals(firstTab())){showTab(firstTab());return;}if(System.currentTimeMillis()-lastBack<1500){super.onBackPressed();return;}lastBack=System.currentTimeMillis();toast("再按一次返回退出");}
-    @Override public void onPause(){super.onPause();paused=true;pollTicket++;pollEpoch=-1;for(HttpURLConnection active:liveConnections.values())active.disconnect();if(composer!=null){composer.clearFocus();root.requestFocus();((InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(composer.getWindowToken(),0);}if(nextPoll!=null)handler.removeCallbacks(nextPoll);}
+    @Override public void onPause(){super.onPause();paused=true;pollTicket++;pollEpoch=-1;eventThread=null;for(HttpURLConnection active:liveConnections.values())active.disconnect();if(composer!=null){composer.clearFocus();root.requestFocus();((InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(composer.getWindowToken(),0);}if(nextPoll!=null)handler.removeCallbacks(nextPoll);}
     @Override public void onResume(){super.onResume();boolean was=paused;paused=false;if(was){root.requestFocus();getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE|android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN);}if(was)MonitorConnection.start(this);
         // Returning from the overlay-permission screen is the exact moment the grant
         // becomes true. Nothing else looked at it again, so the user had to toggle the

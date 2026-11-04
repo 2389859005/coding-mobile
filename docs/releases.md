@@ -2,6 +2,20 @@
 
 以下为当前修改版的主要变化，本地构建产物位于 `dist/`。构建所用的原始 Windows EXE 与 Android APK 来自 [Abyxs/codex-mobile-assistant 的 Releases](https://github.com/Abyxs/codex-mobile-assistant/releases)。
 
+## 2.2.1 · Windows / Android
+
+本次将会话同步改为持久化实时事件流。打开会话后，桌面端的消息、状态、审批和队列变化会主动推送到手机；网络中断时自动回退到短轮询并重连。
+
+| 平台 | 文件 | SHA-256 |
+| --- | --- | --- |
+| Windows | `CodingRemoteAssistant-Windows-2.2.1.exe` | `8dcb1f2ae01557cf597cb7b448e7984ff2504d56f1223d08edf17f7f1c161846` |
+| Android | `CodingRemoteAssistant-Android-2.2.1.apk` | `e6bf93a8be06188c3139c77861579188e8a17861d39a61e65450473de1f9f727` |
+
+- **实时同步**：新增经过配对鉴权的 SSE 会话事件流，首次连接立即返回快照，后续只在状态变化时推送，并用心跳保持通道可用。
+- **断线恢复**：Android 端在前台持续保持实时通道，切换会话、暂停页面或网络断开时会清理旧连接，恢复后自动重连。
+- **兼容回退**：实时通道不可用时仍使用原有短轮询，历史分页继续走普通请求。
+- **版本与构建**：Windows / Android 版本同步为 2.2.1；Python 测试 136 项通过（1 项跳过），Android 原生 Java 编译和两端安装包构建通过。
+
 ## 2.2.0 · Windows / Android
 
 本次继续收敛手机会话页和桌面宠物的交互层级，并降低远程轮询与重复握手的开销。

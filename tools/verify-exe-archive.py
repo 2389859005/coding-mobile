@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'packaging'))
 from build_common import unpack
 
 ROOT = Path(__file__).resolve().parents[1]
-target = ROOT / 'dist/CodingRemoteAssistant-Windows-2.2.0.exe'
+target = ROOT / 'dist/CodingRemoteAssistant-Windows-2.2.1.exe'
 prefix, entries, version, dll = unpack(target.read_bytes())
 rows = {name: (payload, raw, compressed) for name, payload, raw, compressed, kind in entries}
 print('archive entries', len(rows), 'overlay bytes', len(prefix))

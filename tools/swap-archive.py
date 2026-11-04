@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT / 'packaging'))
 from build_common import unpack, MAGIC
 
 BASE = ROOT / '.local/native-base-windows-1.6.23.exe'
-PACKED = ROOT / 'dist/CodingRemoteAssistant-Windows-2.2.0.exe'
+PACKED = ROOT / 'dist/CodingRemoteAssistant-Windows-2.2.1.exe'
 SWAPPED = ROOT / '.local/swapped.exe'
 
 base = BASE.read_bytes()

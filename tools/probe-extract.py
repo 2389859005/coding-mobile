@@ -21,7 +21,7 @@ from product_icon import replace_icon
 
 BASE = ROOT / '.local/native-base-windows-1.6.23.exe'
 TARGET = ROOT / 'dist/CodingRemoteAssistant-probe.exe'
-SHIPPED = ROOT / 'dist/CodingRemoteAssistant-Windows-2.2.0.exe'
+SHIPPED = ROOT / 'dist/CodingRemoteAssistant-Windows-2.2.1.exe'
 
 parser = argparse.ArgumentParser(description='Build the frozen-runtime probe EXE.')
 parser.add_argument('--from-exe', help='take the module table, loader and entry stub from this EXE instead of .local')

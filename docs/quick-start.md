@@ -1,6 +1,6 @@
 # 快速开始
 
-适用于 coding远程 2.2.0：Windows x64 助手与 Android 8.0+ App。安装包名称、版本与下载入口见 [README](../README.md#安装与连接)。
+适用于 coding远程 2.2.1：Windows x64 助手与 Android 8.0+ App。安装包名称、版本与下载入口见 [README](../README.md#安装与连接)。
 
 ## 1. 准备电脑与手机
 

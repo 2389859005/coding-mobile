@@ -64,6 +64,9 @@ class NativeApiTests(unittest.TestCase):
         import types
         self.tmp=tempfile.TemporaryDirectory();self.root=Path(self.tmp.name);self.pair=Pairing(self.root)
         class Bridge:
+            class Store:
+                def get(self,sid):return {'id':sid,'status':'idle','updatedAt':1,'cwd':'D:/fixture'}
+            store=Store()
             def list(self,**kwargs):return [{'id':'fixture','title':'Fixture','cwd':'D:/fixture'}]
             def view(self,*args,**kwargs):return {'id':'fixture','turns':[{'messages':[{'role':'user','text':'hello'}]}]}
         self.server=NativeServer(Bridge(),types.SimpleNamespace(desktop=types.SimpleNamespace(connected=False)),self.pair,self.root)
@@ -89,6 +92,21 @@ class NativeApiTests(unittest.TestCase):
         self.assertEqual(self.call('/api/native/codex/fixture',token=token)[1]['messages'][0]['text'],'hello')
         self.assertEqual(self.call('/api/unpair',{},token=token)[0],200)
         self.assertEqual(self.call('/api/native/codex',token=token)[0],401)
+
+    def test_event_stream_pushes_an_authenticated_snapshot_immediately(self):
+        import http.client
+        code=json.loads(self.pair.issue(self.base));status,value=self.call('/api/pair',{'token':code['token'],'device':'Fixture'});self.assertEqual(status,200)
+        connection=http.client.HTTPConnection('127.0.0.1',self.server.server_port,timeout=3)
+        connection.request('GET','/api/native/codex/fixture/events',headers={'Authorization':'Bearer '+value['token']})
+        response=connection.getresponse();self.assertEqual(response.status,200);self.assertEqual(response.getheader('Content-Type'),'text/event-stream; charset=utf-8')
+        lines=[]
+        while True:
+            line=response.readline().decode('utf-8').rstrip('\r\n')
+            if not line:break
+            lines.append(line)
+        connection.close()
+        self.assertIn('event: snapshot',lines)
+        self.assertTrue(any(line.startswith('data: {') and 'hello' in line for line in lines))
     def test_approval_forms_are_not_silently_treated_as_simple_approval(self):
         value=codex_detail({'id':'x','requests':[{'id':'p','method':'item/tool/requestUserInput','params':{}}]})
         self.assertTrue(value['session']['requests'][0]['needsInput'])

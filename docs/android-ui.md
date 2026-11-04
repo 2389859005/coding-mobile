@@ -1,6 +1,6 @@
 # 手机功能说明
 
-适用于 Android 原生版 2.2.0。首次配对与客户端接入见[快速开始](quick-start.md)，示例截图见 [README](../README.md#界面示例)。
+适用于 Android 原生版 2.2.1。首次配对与客户端接入见[快速开始](quick-start.md)，示例截图见 [README](../README.md#界面示例)。
 
 ## 会话与项目
 

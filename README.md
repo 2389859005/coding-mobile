@@ -52,8 +52,8 @@ coding远程是一款连接 Windows 桌面 AI 编程客户端与 Android 手机�
 
 | 平台 | 本地构建文件 | 要求 |
 | --- | --- | --- |
-| Windows | `dist/CodingRemoteAssistant-Windows-2.2.0.exe` | x64；已安装并登录至少一个支持的桌面客户端；安装包自带 Python 运行时。 |
-| Android | `dist/CodingRemoteAssistant-Android-2.2.0.apk` | Android 8.0+；ARM64 或 x86_64。 |
+| Windows | `dist/CodingRemoteAssistant-Windows-2.2.1.exe` | x64；已安装并登录至少一个支持的桌面客户端；安装包自带 Python 运行时。 |
+| Android | `dist/CodingRemoteAssistant-Android-2.2.1.apk` | Android 8.0+；ARM64 或 x86_64。 |
 
 1. 在 Windows 上打开所需客户端，再运行助手。
 2. 选择默认的 **临时扫码连接**，等待生成二维码。
