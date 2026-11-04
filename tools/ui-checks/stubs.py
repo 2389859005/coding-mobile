@@ -18,6 +18,7 @@ public class Paint {
     public enum Style { FILL, STROKE }
     public enum Cap { ROUND }
     public enum Join { ROUND }
+    public enum Align { LEFT, CENTER, RIGHT }
     private int color=0xff000000;private float stroke=1f;private Style style=Style.FILL;
     public Paint(){}
     public Paint(int flags){}
@@ -32,7 +33,16 @@ public class Paint {
     public void setStrokeCap(Cap c){}
     public void setStrokeJoin(Join j){}
     public void setColorFilter(ColorFilter f){}
+    public void setTextSize(float size){}
+    public void setTextAlign(Align align){}
+    public void setTypeface(Typeface typeface){}
     public boolean isAntiAlias(){return true;}
+}
+''',
+    "android/graphics/Typeface.java": r'''
+package android.graphics;
+public class Typeface {
+    public static final Typeface DEFAULT_BOLD=new Typeface();
 }
 ''',
     "android/graphics/Path.java": r'''
@@ -93,6 +103,7 @@ public class Canvas {
     public void drawCircle(float cx,float cy,float rad,Paint paint){apply(paint);Shape s=new Ellipse2D.Float(cx-rad,cy-rad,rad*2,rad*2);if(paint.getStyle()==Paint.Style.STROKE)g.draw(s);else g.fill(s);}
     public void drawRoundRect(float l,float t,float r,float b,float rx,float ry,Paint paint){apply(paint);Shape s=new RoundRectangle2D.Float(l,t,r-l,b-t,rx*2,ry*2);if(paint.getStyle()==Paint.Style.STROKE)g.draw(s);else g.fill(s);}
     public void drawLine(float x1,float y1,float x2,float y2,Paint paint){apply(paint);g.draw(new Line2D.Float(x1,y1,x2,y2));}
+    public void drawText(String text,float x,float y,Paint paint){apply(paint);g.drawString(text,x,y);}
 }
 ''',
     "android/graphics/Color.java": r'''

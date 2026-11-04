@@ -4,15 +4,12 @@ import android.content.Context;
 import android.view.*;
 import android.widget.*;
 
-/** One draggable handle containing independent, accessible top/latest actions. */
+/** A single draggable "latest" capsule that appears while the reader is away from the end. */
 final class FloatingNavigation extends LinearLayout {
     final Button top,latest;
-    /** The disc size and the gap between the two discs. The height the handle needs is
-     *  disc+gap+disc plus its own padding, and the call site sizes the container from
-     *  these rather than from a number it guessed. */
-    static final int DISC_DP=46;
-    static final int GAP_DP=8;
-    static int spanDp(){return DISC_DP*2+GAP_DP;}
+    static final int DISC_DP=44;
+    static final int GAP_DP=0;
+    static int spanDp(){return DISC_DP;}
     private float startX,startY,baseX,baseY;
     private boolean dragged;
     private final android.os.Handler idle=new android.os.Handler(android.os.Looper.getMainLooper());
@@ -26,20 +23,14 @@ final class FloatingNavigation extends LinearLayout {
         // circular background is not squared off by the parent's edge.
         setPadding(0,0,0,0);setClipToPadding(false);setClipChildren(false);
         setBackgroundColor(android.graphics.Color.TRANSPARENT);
-        top=ui.iconButton("arrow","回到顶部");latest=ui.iconButton("latest","回到最新");
-        // A radius equal to half the disc is what makes it a circle; any of the named
-        // corner steps rounds the corners and stops there. The discs are square by
-        // construction and the background is drawn to that square.
+        // Keep the top action as a field for callers that still hold the old reference,
+        // but remove it from the visual hierarchy. One capsule is easier to understand
+        // and no longer puts two floating targets over the transcript.
+        top=ui.iconButton("arrow","回到顶部");top.setVisibility(GONE);
+        latest=ui.button("↓ 最新",false);latest.setContentDescription("回到最新");latest.setTextSize(NativeUi.CAPTION);latest.setTextColor(NativeUi.INK);latest.setGravity(Gravity.CENTER);latest.setPadding(ui.dp(14),0,ui.dp(14),0);
         int disc=ui.dp(DISC_DP);
-        top.setBackground(ui.touch(NativeUi.WHITE,DISC_DP/2,true));latest.setBackground(ui.touch(NativeUi.WHITE,DISC_DP/2,true));
-        top.setElevation(ui.dp(NativeUi.LIFT_FLOATING));latest.setElevation(ui.dp(NativeUi.LIFT_FLOATING));
-        // iconButton brings its own 12dp padding, which shrinks the drawn disc inside a
-        // 46dp box; clearing it lets the background fill the whole square.
-        top.setPadding(0,0,0,0);latest.setPadding(0,0,0,0);
-        addView(top,new LayoutParams(disc,disc));
-        LayoutParams latestLp=new LayoutParams(disc,disc);
-        latestLp.topMargin=ui.dp(GAP_DP);
-        addView(latest,latestLp);
+        latest.setBackground(ui.touch(NativeUi.WHITE,NativeUi.CORNER_DISC,true));latest.setElevation(ui.dp(NativeUi.LIFT_FLOATING));
+        addView(latest,new LayoutParams(ui.dp(92),disc));
         top.setOnClickListener(v->toTop.run());latest.setOnClickListener(v->toLatest.run());
         View.OnTouchListener drag=(v,e)->{
             if(e.getActionMasked()==MotionEvent.ACTION_DOWN){startX=e.getRawX();startY=e.getRawY();baseX=getX();baseY=getY();dragged=false;v.setPressed(true);
@@ -64,7 +55,7 @@ final class FloatingNavigation extends LinearLayout {
                 // report. Let the Button finish its own gesture.
                 rest();return false;}
             return false;
-        };top.setOnTouchListener(drag);latest.setOnTouchListener(drag);
+        };latest.setOnTouchListener(drag);
     }
     /** Makes the handle visible again and restarts the idle countdown. */
     void wake(){

@@ -1,9 +1,11 @@
 """JSON only: no web pages, passwords, or arbitrary Desktop RPC forwarding."""
 import hashlib
+import gzip
 import json
 import logging
 import sqlite3
 import threading
+import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -236,9 +238,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def output(self, status, value):
         body=json.dumps(value,ensure_ascii=False).encode()
+        accepts=self.headers.get('Accept-Encoding','').lower()
+        compressed=False
+        if len(body)>=768 and 'gzip' in accepts:
+            body=gzip.compress(body,compresslevel=6,mtime=0);compressed=True
         self.send_response(status)
         self.send_header('Content-Type','application/json; charset=utf-8')
         self.send_header('Cache-Control','no-store')
+        if compressed:self.send_header('Content-Encoding','gzip')
         self.send_header('Content-Length',str(len(body)))
         if status>=400:
             # A rejected request may carry an unread body; it must not be parsed
@@ -325,9 +332,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self.output(200,result)
             if write != bool(action):raise APIError(405,'请求方法不支持')
             if sid and not action and backend in ('claude','deepseek'):
-                # An idle conversation that has not changed since the last poll is
-                # answered without reading its transcript again.
-                answer=self.server.features.unchanged_answer(backend,sid,query.get('known',[''])[0])
+                # Hold an unchanged idle poll briefly. A desktop update returns on
+                # the next check instead of making the phone pay a fixed 1–3 second
+                # polling delay, while the bounded wait still releases the worker
+                # when a client disappears.
+                known=query.get('known',[''])[0]
+                wait_ms=min(15000,max(0,int(query.get('wait',['0'])[0] or 0)))
+                deadline=time.monotonic()+wait_ms/1000
+                answer=None
+                while known and wait_ms>0 and time.monotonic()<deadline:
+                    answer=self.server.features.unchanged_answer(backend,sid,known)
+                    if answer is None:break
+                    time.sleep(.35)
+                if answer is None and known:answer=self.server.features.unchanged_answer(backend,sid,known)
                 if answer is not None:return self.output(200,answer)
             if backend in ('claude','deepseek') and action=='send':
                 # Resolve staged image IDs only after authentication and session scoping.

@@ -11,9 +11,8 @@ import android.graphics.drawable.Drawable;
  *
  * Each form owns a full, bright kawaii palette (body, shade, belly, cheek, detail,
  * eye) instead of borrowing the theme's two colours, so the pet reads as a cute
- * sticker rather than a monochrome glyph. The overlay no longer draws a status
- * word or badge: the pet shows what is happening purely through motion, and reacts
- * to a new message with a hop and a popping heart.
+ * sticker rather than a monochrome glyph. A small status badge is drawn on the sprite
+ * itself, so state remains visible without turning the floating window into a text card.
  */
 final class PetSprite extends Drawable {
     /**
@@ -87,9 +86,11 @@ final class PetSprite extends Drawable {
     //   startle  a long press has gone on too long: the pet snaps awake
     private float stroke,startle,poke;
     private int taps;
+    private int badgeColor=0xff7b8794,badgeCount;
 
     PetSprite(String form,int ink,int paper,int size){this.ink=ink;this.paper=paper;this.size=size;form(form);setBounds(0,0,size,size);}
     String form(){return form;}
+    void badge(int color,int count){badgeColor=color;badgeCount=Math.max(0,Math.min(99,count));invalidateSelf();}
     void form(String value){
         form=FORMS[index(value)];
         switch(form){
@@ -216,6 +217,14 @@ final class PetSprite extends Drawable {
         // "more restores than saves" from draw(), on the main thread, on the first frame
         // the pet painted: the overlay crash.
         cue(canvas);
+        // Keep the state cue on the cut-out itself. A dot is enough for a running task;
+        // pending work gets a compact count in the same amber pill.
+        if(badgeColor!=0){
+            float radius=badgeCount>0?7f:5.5f;
+            use(0xffffffff,.96f,0);canvas.drawCircle(54,9,radius+1.6f,paint);
+            use(badgeColor,1f,0);if(badgeCount>0)canvas.drawRoundRect(46,2,62,16,7,7,paint);else canvas.drawCircle(54,9,radius,paint);
+            if(badgeCount>0){paint.setColor(0xffffffff);paint.setAlpha(Math.round(255*dim));paint.setStyle(Paint.Style.FILL);paint.setTextSize(8.5f);paint.setTextAlign(Paint.Align.CENTER);paint.setTypeface(Typeface.DEFAULT_BOLD);canvas.drawText(badgeCount>9?"9+":String.valueOf(badgeCount),54,11.7f,paint);}
+        }
         canvas.restore();
     }
 

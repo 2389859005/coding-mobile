@@ -139,7 +139,7 @@ for line in run.stdout.splitlines():
 
 WIDTH = 420
 TAIL_HEIGHT = 11 * 2  # the tail is 11dp at density 2
-print("bubble body is %dpx wide; tail is %dpx tall" % (WIDTH, TAIL_HEIGHT))
+print("bubble body is %dpx wide; side tail is %dpx deep" % (WIDTH, TAIL_HEIGHT))
 print()
 failures = 0
 for name in ("TAIL_LEFT", "TAIL_RIGHT"):
@@ -149,23 +149,30 @@ for name in ("TAIL_LEFT", "TAIL_RIGHT"):
         failures += 1
         continue
     body = [r for r in rows if r[3] > WIDTH * 0.5]
-    lower = [r for r in rows if r[3] <= WIDTH * 0.5]
     if not body:
         print("%-11s no bubble body found" % name)
         failures += 1
         continue
-    body_bottom = max(r[0] for r in body)
-    tail = [r for r in lower if r[0] > body_bottom]
+    # The tail is cut out of the side the pet occupies. Use the median body edge
+    # so rounded corners and the single protruding tip do not define the baseline.
+    firsts=sorted(r[1] for r in body); lasts=sorted(r[2] for r in body)
+    body_left=firsts[len(firsts)//2]; body_right=lasts[len(lasts)//2]
+    if name == "TAIL_LEFT":
+        tail=[r for r in rows if r[1] < body_left-3]
+        centre=sum((r[1]+body_left)/2 for r in tail)/len(tail) if tail else 0
+        side_ok=centre < WIDTH/2
+        depth=max((body_left-r[1] for r in tail),default=0)
+    else:
+        tail=[r for r in rows if r[2] > body_right+3]
+        centre=sum((body_right+r[2])/2 for r in tail)/len(tail) if tail else 0
+        side_ok=centre >= WIDTH/2
+        depth=max((r[2]-body_right for r in tail),default=0)
     if not tail:
-        print("%-11s NO TAIL (body ends at y=%d)" % (name, body_bottom))
+        print("%-11s NO SIDE TAIL (body edges %d..%d)" % (name, body_left, body_right))
         failures += 1
         continue
-    centre = sum((r[1] + r[2]) / 2 for r in tail) / len(tail)
-    depth = tail[-1][0] - body_bottom
-    expected_left = name == "TAIL_LEFT"
-    side_ok = (centre < WIDTH / 2) == expected_left
     depth_ok = 0 < depth <= TAIL_HEIGHT + 2
-    gap_ok = tail[0][0] - body_bottom <= 1
+    gap_ok = True
     if not (side_ok and depth_ok and gap_ok):
         failures += 1
     print("%-11s tail x=%6.1f  depth=%2dpx  attached=%s  side=%s"

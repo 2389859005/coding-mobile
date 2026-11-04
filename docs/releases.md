@@ -2,6 +2,21 @@
 
 以下为当前修改版的主要变化，本地构建产物位于 `dist/`。构建所用的原始 Windows EXE 与 Android APK 来自 [Abyxs/codex-mobile-assistant 的 Releases](https://github.com/Abyxs/codex-mobile-assistant/releases)。
 
+## 2.2.0 · Windows / Android
+
+本次继续收敛手机会话页和桌面宠物的交互层级，并降低远程轮询与重复握手的开销。
+
+| 平台 | 文件 | SHA-256 |
+| --- | --- | --- |
+| Windows | `CodingRemoteAssistant-Windows-2.2.0.exe` | `d23b92fb7c662656e808de9e8e8e469bec3a4d91681be044526825a47be15da4` |
+| Android | `CodingRemoteAssistant-Android-2.2.0.apk` | `82b91be1a56df66d482b9c27b9a8366d8ab8751a753f9cd231d1bf0044410895` |
+
+- **会话状态**：审批、队列、执行步骤和待核对操作统一收进会话状态托盘与详情弹层，输入区不再被多个面板反复推移。
+- **桌面宠物**：单击打开任务卡片，长按提供打开 App、隐藏一小时和关闭悬浮窗；状态徽标、拖动贴边和状态动画保持可见。
+- **滚动导航**：只在未处于最新位置时显示“↓ 最新”胶囊，减少会话内容上的悬浮干扰。
+- **连接效率**：服务端支持 gzip 响应和有界长轮询，Android 端解压响应、复用 keep-alive 与近期验证过的线路。
+- **版本与构建**：Windows / Android 版本同步为 2.2.0；Python 测试 135 项通过（1 项跳过），Android 原生 Java 编译和两端安装包构建通过。
+
 ## 2.1.1 · Windows / Android
 
 **已发布**：安装包见 [v2.1.1 Release](https://github.com/2389859005/coding-mobile/releases/tag/v2.1.1)。

@@ -1,4 +1,4 @@
-coding远程助手 2.1.1 — local modified build, 2026-10-05.
+coding远程助手 2.2.0 — local modified build, 2026-10-05.
 
 Based on Codex Mobile Assistant Windows 1.6.23 and Android 1.0.19.
 This is not an official upstream release.

@@ -1,5 +1,6 @@
 package io.github.abyxs.codingremote;
 import android.content.*;
+import android.app.AlertDialog;
 import android.graphics.*;
 import android.graphics.drawable.*;
 import android.os.*;
@@ -58,6 +59,7 @@ final class StatusOverlay {
     private boolean petDown;
     private int petCombos;
     private Runnable holdFrame;
+    private AlertDialog petMenu;
     private String petForm="linepup";
     /**
      * The bubble lives inside the pet's own window, not in a second overlay.
@@ -322,6 +324,7 @@ final class StatusOverlay {
         // screen - which is the state it is always pressed in.
         else if(AppVisibility.visible()&&!forced)blocked="App 正在前台，切到其他应用后显示";
         else if(!prefs().getBoolean("overlay",false))blocked="「显示实时任务悬浮窗」未开启";
+        else if(prefs().getLong("overlayHiddenUntil",0)>System.currentTimeMillis())blocked="悬浮窗暂时隐藏，到点后自动恢复";
         else if(!Settings.canDrawOverlays(context))blocked="缺少「显示在其他应用上层」权限";
         if(blocked!=null){blockReason=blocked;remove();return;}
         blockReason="";
@@ -370,7 +373,7 @@ final class StatusOverlay {
         if(collapsed){
             // "简洁": a small neutral handle so the overlay is still reachable.
             ImageView chip=new ImageView(context);
-            GradientDrawable shape=new GradientDrawable();shape.setShape(GradientDrawable.OVAL);shape.setColor(background);shape.setStroke(ui.dp(1),withAlpha(foreground,0x40));
+            GradientDrawable shape=new GradientDrawable();shape.setShape(GradientDrawable.OVAL);int pendingCount=counts[0]+counts[1]+counts[2];shape.setColor(pendingCount>0?withAlpha(0xffffa62b,0x28):background);shape.setStroke(ui.dp(1),withAlpha(foreground,0x40));
             chip.setBackground(shape);chip.setScaleType(ImageView.ScaleType.CENTER);chip.setImageDrawable(new NativeUi.Symbol("chat",foreground,ui.dp(24)));
             chip.setContentDescription("实时任务悬浮窗");
             petHost=chip;attachTouch(chip);stopPet();
@@ -383,6 +386,8 @@ final class StatusOverlay {
         ImageView host=new ImageView(context);
         pet=new PetSprite(petForm,foreground,background,ui.dp(64));host.setImageDrawable(pet);host.setScaleType(ImageView.ScaleType.FIT_CENTER);
         dress(pet,statusLabel);
+        int pendingCount=counts[0]+counts[1]+counts[2];
+        pet.badge(!connection.isEmpty()?0xff7b8794:pendingCount>0?0xffffa62b:0xff2e9b68,pendingCount);
         host.setContentDescription("实时任务悬浮窗");
         petHost=host;attachTouch(host);
         // greetPet rather than startPet: the notes only make sense on the frame the
@@ -421,6 +426,16 @@ final class StatusOverlay {
         catch(Exception failure){blockReason="窗口布局失败："+failure.getClass().getSimpleName();hosted=false;lastBlockReason=blockReason;}
     }
 
+    /** Stick the pet to the nearest screen edge after a drag. */
+    private void snapToEdge(){
+        if(panel==null||params==null)return;
+        int width=metrics().widthPixels, target=params.x+panel.getWidth()/2<width/2?ui.dp(8):Math.max(ui.dp(8),width-panel.getWidth()-ui.dp(8));
+        params.x=Math.max(0,Math.min(Math.max(0,width-panel.getWidth()),target));
+        anchorX=params.x;anchorY=params.y;
+        try{manager.updateViewLayout(panel,params);}catch(Exception ignored){}
+        prefs().edit().putInt("overlayX",anchorX).putInt("overlayY",anchorY).apply();
+    }
+
     private void attachTouch(final View host){
         host.setOnTouchListener(new View.OnTouchListener(){float x,y;int baseX,baseY;boolean dragged;
             public boolean onTouch(View v,MotionEvent e){
@@ -456,36 +471,45 @@ final class StatusOverlay {
                         if(pet!=null)pet.release();
                         stopHold();
                         if(dragged){
-                            anchorX=params.x;anchorY=params.y;
-                            prefs().edit().putInt("overlayX",anchorX).putInt("overlayY",anchorY).apply();
+                            snapToEdge();
                             return true;
                         }
-                        if(held>=380){
-                            // A long press is an instruction, not a pet: answer it with the
-                            // bubble near the pet and let the startle die down on its own.
+                        if(held>=520){
+                            // Long press is a visible shortcut menu. The old hidden
+                            // four-tap gesture was impossible to discover and collided
+                            // with ordinary petting.
                             petStartleAt=SystemClock.uptimeMillis();
-                            openBubble();
+                            showPetMenu();
                         }else if(wasDown){
-                            // A tap is affection. It pokes the pet, and only opens the
-                            // bubble if the pet is not the thing being tapped - otherwise
-                            // every accidental brush would throw a window over the screen.
                             if(pet!=null)pet.tap();
-                            lastTapAt=SystemClock.uptimeMillis();
-                            int combo=pet!=null?pet.combo():0;
-                            if(combo>=4){
-                                // Four taps in a row was meant as "open it".
-                                petCombos=0;
-                                openBubble();
-                            }else{
-                                petCombos++;
-                                petHopAt=SystemClock.uptimeMillis();
-                            }
+                            lastTapAt=SystemClock.uptimeMillis();petCombos=0;
+                            // A single tap always opens the task card beside the pet.
+                            openBubble();
                         }
                         return true;
                 }
                 return true;
             }
         });
+    }
+
+    private void showPetMenu(){
+        if(closed)return;
+        if(petMenu!=null&&petMenu.isShowing())return;
+        String[] choices={"打开 coding远程","隐藏 1 小时","关闭悬浮窗"};
+        AlertDialog dialog=new AlertDialog.Builder(context).setTitle("实时任务").setItems(choices,(d,which)->{
+            if(which==0){
+                try{context.startActivity(new Intent(context,MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_SINGLE_TOP));}catch(Exception ignored){}
+                closeBubble();
+            }else if(which==1){
+                prefs().edit().putLong("overlayHiddenUntil",System.currentTimeMillis()+60L*60L*1000L).apply();remove();
+            }else{
+                prefs().edit().putBoolean("overlay",false).remove("overlayHiddenUntil").apply();remove();
+            }
+        }).setNegativeButton("取消",null).create();
+        petMenu=dialog;dialog.setOnDismissListener(d->{if(petMenu==dialog)petMenu=null;});
+        Window window=dialog.getWindow();if(window!=null)window.setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY);
+        try{dialog.show();}catch(Exception failure){petMenu=null;lastBlockReason="无法打开悬浮窗菜单："+failure.getClass().getSimpleName();}
     }
 
     /** Keeps the stroke alive for as long as the finger is down. */
@@ -496,7 +520,7 @@ final class StatusOverlay {
             long now=SystemClock.uptimeMillis();
             long down=now-pressAt;
             // Past the long-press threshold the pet stops enjoying it.
-            if(down>=380)pet.hold(Math.min(1f,(down-380)/420f));
+            if(down>=520)pet.hold(Math.min(1f,(down-520)/420f));
             else pet.stroke(1f);
             pet.invalidateSelf();
             main.postDelayed(this,60);
@@ -746,7 +770,7 @@ final class StatusOverlay {
         scrim=null;
     }
 
-    private void remove(){stopPet();pet=null;petHost=null;snapshotKey="";closeBubbleNow();if(panel!=null){try{manager.removeView(panel);}catch(Exception ignored){}panel=null;}hosted=false;lastBlockReason=blockReason.isEmpty()?"尚未收到电脑状态":blockReason;}
+    private void remove(){stopPet();pet=null;petHost=null;snapshotKey="";closeBubbleNow();if(petMenu!=null){try{petMenu.dismiss();}catch(Exception ignored){}petMenu=null;}if(panel!=null){try{manager.removeView(panel);}catch(Exception ignored){}panel=null;}hosted=false;lastBlockReason=blockReason.isEmpty()?"尚未收到电脑状态":blockReason;}
     void close(){main.post(()->{closed=true;AppVisibility.remove(visibilityChanged);remove();
         // The instance is finished: clearing the static reference is what stops the
         // settings button from posting a render against a service that has already been

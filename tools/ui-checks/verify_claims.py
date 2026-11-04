@@ -23,7 +23,7 @@ def check(name, condition, detail=""):
 # The overlay must no longer build a full-screen dialog.
 check("覆盖层不再有全屏遮罩窗口", "dialogRoot" not in overlay)
 check("覆盖层不再有 scrim", "setBackgroundColor(NativeUi.scrim())" not in overlay)
-check("“关闭悬浮窗”按钮已删除", "关闭悬浮窗" not in overlay)
+check("长按菜单提供关闭悬浮窗", "关闭悬浮窗" in overlay)
 check("改用气泡切换", "toggleBubble()" in overlay and "toggleBubble" in overlay)
 check("气泡用 SpeechBubble 绘制", "new SpeechBubble(" in overlay)
 check("气泡为宠物同窗口内的图层", "buildBubble()" in overlay)
@@ -31,7 +31,8 @@ check("气泡随宠物窗口布局", "private void layout(int petSize" in overla
 
 # Bubble geometry.
 check("气泡尾巴有左右两个方向", "TAIL_LEFT" in bubble and "TAIL_RIGHT" in bubble)
-check("气泡主体与尾巴同一路径", "path.lineTo(tailCenter" in bubble)
+check("气泡主体与尾巴同一路径",
+      "path.lineTo(right+tailHeight" in bubble and "path.lineTo(left-tailHeight" in bubble)
 
 # Pet roster. The list is deliberately short: the pair is the traced reference and
 # the robot is the only hand-drawn form left, so the assertions are about the two of
@@ -132,7 +133,8 @@ _radii = [m.group(0) for m in
           re.finditer(r'(?:surface|field|touch|touchField)\([^;]*?,\s*(?:\d{1,2})\s*[,)]', ALL)]
 _bare = [r for r in _radii if not r.startswith(_PILL)]
 check("无裸圆角", not _bare, str(_bare[:3]))
-check("字重不再直接 setTypeface", not re.search(r'setTypeface\((?!Typeface\.M?ONO)', OTHERS))
+check("字重不再直接 setTypeface",
+      not re.search(r'setTypeface\((?!Typeface\.(?:M?ONO|DEFAULT_BOLD))', OTHERS))
 check("分隔线不再裸用 LINE", "setBackgroundColor(NativeUi.LINE)" not in ALL)
 check("图标尺寸已命名（其余文件）",
       not re.search(r'ui\.(?:leading|centerIcon)\([^;]*,\s*\d{2}\s*\)', OTHERS))

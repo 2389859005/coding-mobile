@@ -23,6 +23,7 @@ import android.widget.*;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.io.*;
+import java.util.zip.GZIPInputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.UUID;
@@ -55,6 +56,11 @@ public final class MainActivity extends Activity {
      * governed by scrolling alone. */
     private boolean navigationShown;
     private LinearLayout queuePanel;private JSONArray queuedMessages=new JSONArray();private boolean queueExpanded=false;
+    /** A single glanceable status row replaces the stack of inline task cards. */
+    private LinearLayout statusTray;
+    private TextView statusTrayText;
+    private TextView statusTrayDot;
+    private boolean compactStatusDock=true;
     private int pollTicket=0,historyTicket=0;
     private final java.util.concurrent.ConcurrentHashMap<Thread,HttpURLConnection> liveConnections=new java.util.concurrent.ConcurrentHashMap<>();
     private final ExecutorService liveWorkers=Executors.newFixedThreadPool(2,r->new Thread(r,"conversation-live"));
@@ -274,7 +280,7 @@ public final class MainActivity extends Activity {
         // The image picker returns through onActivityResult long after reset(); a
         // stale key would silently drop the user's selection.
         pickerKey="";uploading=false;
-        pendingPanel=null;sendButton=null;status=null;composer=null;sessionList=null;sessionAdapter=null;messageList=null;messageAdapter=null;permissions=null;
+        pendingPanel=null;sendButton=null;status=null;composer=null;sessionList=null;sessionAdapter=null;messageList=null;messageAdapter=null;permissions=null;statusTray=null;statusTrayText=null;statusTrayDot=null;
         appStatusUntil=0;connectionLabel=null;search=null;historyBar=null;emptyState=null;composerScroll=null;actionHint=null;permissionCount=0;followingLatest=true;chatPath="";hasEarlier=false;
         chatHeader=null;attachmentRow=null;fastScroller=null;headerHidden=false;floating=null;taskPanel=null;sessionTitle=null;
         // The composer's fold state is per-session chrome; leaving the stale references
@@ -401,11 +407,11 @@ public final class MainActivity extends Activity {
         if(!TrustedOrigin.valid(address))throw new IOException("连接地址不受支持，请重新扫码绑定");HttpURLConnection c=EmbeddedNetwork.open(this,address+path);
         // A read may wait for a long transcript over a slow tunnel; writes already
         // have their own server-side bounds.
-        c.setConnectTimeout(7000);c.setReadTimeout(body==null?30000:110000);c.setInstanceFollowRedirects(false);
-        if(Thread.currentThread().getName().equals("conversation-live"))liveConnections.put(Thread.currentThread(),c);c.setRequestProperty("Accept","application/json");c.setRequestProperty("Origin",address);if(!credential.isEmpty())c.setRequestProperty("Authorization","Bearer "+credential);
+        c.setConnectTimeout(7000);c.setReadTimeout(body==null?25000:110000);c.setInstanceFollowRedirects(false);
+        if(Thread.currentThread().getName().equals("conversation-live"))liveConnections.put(Thread.currentThread(),c);c.setRequestProperty("Accept","application/json");c.setRequestProperty("Accept-Encoding","gzip");c.setRequestProperty("Connection","keep-alive");c.setRequestProperty("Origin",address);if(!credential.isEmpty())c.setRequestProperty("Authorization","Bearer "+credential);
         boolean reusable=false;
         try{if(body!=null){byte[] bytes=body.toString().getBytes("UTF-8");c.setRequestMethod("POST");c.setRequestProperty("Content-Type","application/json");c.setDoOutput(true);c.setFixedLengthStreamingMode(bytes.length);try(OutputStream out=c.getOutputStream()){out.write(bytes);}}
-            int code=c.getResponseCode();InputStream in=code<400?c.getInputStream():c.getErrorStream();ByteArrayOutputStream bytes=new ByteArrayOutputStream();if(in!=null)try(InputStream input=in){byte[] buffer=new byte[8192];int n;while((n=input.read(buffer))!=-1){if(bytes.size()+n>32*1024*1024)throw new IOException("会话内容过大，请在电脑查看");bytes.write(buffer,0,n);}}
+            int code=c.getResponseCode();InputStream in=code<400?c.getInputStream():c.getErrorStream();if(in!=null&&"gzip".equalsIgnoreCase(c.getHeaderField("Content-Encoding")))in=new GZIPInputStream(in);ByteArrayOutputStream bytes=new ByteArrayOutputStream();if(in!=null)try(InputStream input=in){byte[] buffer=new byte[8192];int n;while((n=input.read(buffer))!=-1){if(bytes.size()+n>32*1024*1024)throw new IOException("会话内容过大，请在电脑查看");bytes.write(buffer,0,n);}}
             JSONObject result;try{result=new JSONObject(bytes.toString("UTF-8"));}catch(Exception e){throw new ConnectionProfiles.HttpFailure(code>=500?code:502,"连接入口暂时未就绪，正在尝试恢复");}
             if(code>=300)throw new ApiError(code,result.optString("error","连接失败"));
             // Keep a fully read response in the pool: the next poll then reuses the
@@ -628,7 +634,7 @@ public final class MainActivity extends Activity {
             else if(e.getActionMasked()==1||e.getActionMasked()==3){scrolling=false;handler.postDelayed(()->{if(isDestroyed()||scrolling)return;finishScroll();scheduleHeaderReveal();},100);}return false;}});
         messageList.setOnScrollListener(new AbsListView.OnScrollListener(){public void onScrollStateChanged(AbsListView v,int state){scrolling=state!=SCROLL_STATE_IDLE;if(!scrolling){finishScroll();scheduleHeaderReveal();}}
             public void onScroll(AbsListView v,int first,int visible,int total){if(fastScroller!=null)fastScroller.invalidate();updateNavigation();if(scrolling&&total>0){View last=v.getChildAt(v.getChildCount()-1);followingLatest=first+visible>=total&&last!=null&&last.getBottom()<=v.getHeight()-v.getPaddingBottom()+dp(12);}}});screen.addView(transcript,new LinearLayout.LayoutParams(-1,0,1));
-        LinearLayout dock=column();dock.setPadding(dp(16),0,dp(16),dp(8));actionHint=button("",false);actionHint.setTextSize(NativeUi.CAPTION);actionHint.setTextColor(GREEN);actionHint.setBackground(ui.touch(NativeUi.TINT,NativeUi.CORNER_ROW,false));ui.leading(actionHint,"shield",GREEN,NativeUi.GLYPH_INLINE);add(dock,actionHint,48);actionHint.setVisibility(View.GONE);actionHint.setOnClickListener(v->{
+        LinearLayout dock=column();dock.setPadding(dp(16),0,dp(16),dp(8));add(dock,buildStatusTray(),48);actionHint=button("",false);actionHint.setTextSize(NativeUi.CAPTION);actionHint.setTextColor(GREEN);actionHint.setBackground(ui.touch(NativeUi.TINT,NativeUi.CORNER_ROW,false));ui.leading(actionHint,"shield",GREEN,NativeUi.GLYPH_INLINE);add(dock,actionHint,48);actionHint.setVisibility(View.GONE);actionHint.setOnClickListener(v->{
             if(pending!=null){
                 // Every path out of a stale submission goes through here, including
                 // "I checked the computer and it is done", which simply drops it.
@@ -700,7 +706,7 @@ public final class MainActivity extends Activity {
         sendButton.setOnClickListener(v->{String value=composer.getText().toString();ChatCache current=chatCaches.get(sessionKey);JSONArray images=new JSONArray();if(current!=null)for(JSONObject image:current.images)images.put(image.optString("id"));
             if(value.trim().isEmpty()&&images.length()==0){if(current!=null&&Boolean.TRUE.equals(current.running))submit("stop",new JSONObject());return;}
             try{JSONArray plugins=new JSONArray();if(current!=null)for(String plugin:current.plugins)plugins.put(plugin);JSONObject message=new JSONObject().put("text",value).put("images",images).put("plugins",plugins).put("mode","auto");if(current!=null&&Boolean.TRUE.equals(current.running)){JSONArray attachments=new JSONArray();for(JSONObject image:current.images)attachments.put(image);message.put("attachments",attachments);submit("queue",new JSONObject().put("operation","enqueue").put("message",message));}else{withdrawable=value;submit("send",message);}}catch(Exception e){showError(e);}});
-        pendingControls();if(cache.page!=null){followingLatest=cache.followingLatest;renderSession(cache.page,false);if(cache.first>=0)messageList.setSelectionFromTop(cache.first,cache.top);}root.requestFocus();root.requestApplyInsets();getSharedPreferences("ui",0).edit().putBoolean("resumeChat",true).putString("lastSession",id).putString("lastTitle",cache.title).putString("lastBackend",backend).apply();
+        pendingControls();if(cache.page!=null){followingLatest=cache.followingLatest;renderSession(cache.page,false);if(cache.first>=0)messageList.setSelectionFromTop(cache.first,cache.top);}refreshStatusTray();root.requestFocus();root.requestApplyInsets();getSharedPreferences("ui",0).edit().putBoolean("resumeChat",true).putString("lastSession",id).putString("lastTitle",cache.title).putString("lastBackend",backend).apply();
         if(cache.page==null)restoreConversation(sessionKey,epoch);if(!paused){final int generation=epoch;if(!sessionKey.equals(lastDesktopKey)){lastDesktopKey=sessionKey;fetch("/api/native/"+backend+"/"+id+"/open",new JSONObject(),generation,value->{});}poll(generation,id);}
     }
     private void updateSend(){if(sendButton==null)return;ChatCache current=chatCaches.get(sessionKey);boolean draft=composer!=null&&(!composer.getText().toString().trim().isEmpty()||(current!=null&&!current.images.isEmpty()));boolean stop=!draft&&current!=null&&Boolean.TRUE.equals(current.running);boolean enabled=!uploading&&!sending&&pending==null&&(draft||stop);sendButton.setEnabled(enabled);sendButton.setAlpha(enabled?1f:.6f);JSONObject usage=current!=null&&current.page!=null?current.page.contextUsage:null;boolean hasUsage=usage!=null&&usage.optBoolean("available");
@@ -721,6 +727,79 @@ public final class MainActivity extends Activity {
         // and the arc no longer shared an axis.
         sendButton.setPadding(0,0,0,0);
         if(chatMeta!=null)chatMeta.setText("");}
+
+    /** Build the compact state tray shown immediately above the composer. */
+    private LinearLayout buildStatusTray(){
+        LinearLayout tray=row();tray.setGravity(Gravity.CENTER_VERTICAL);
+        tray.setPadding(dp(12),0,dp(8),0);
+        tray.setBackground(ui.touch(NativeUi.SOFT,NativeUi.CORNER_ROW,true));
+        statusTrayDot=text("●",NativeUi.CAPTION,GREEN);statusTrayDot.setGravity(Gravity.CENTER);tray.addView(statusTrayDot,new LinearLayout.LayoutParams(dp(24),dp(40)));
+        statusTrayText=text("正在读取会话状态…",NativeUi.CAPTION,INK);single(statusTrayText);tray.addView(statusTrayText,new LinearLayout.LayoutParams(0,dp(48),1));
+        ImageView arrow=ui.icon("right",MUTED,NativeUi.GLYPH_INLINE);tray.addView(arrow,new LinearLayout.LayoutParams(dp(20),dp(20)));
+        tray.setContentDescription("会话状态，点击查看审批、队列和执行步骤");
+        tray.setOnClickListener(v->showStatusSheet());
+        statusTray=tray;return tray;
+    }
+
+    /** Refresh the tray without rebuilding any of the existing task data. */
+    private void refreshStatusTray(){
+        if(statusTray==null||statusTrayText==null)return;
+        ChatCache cache=chatCaches.get(sessionKey);SessionPage page=cache==null?null:cache.page;
+        int permissionsCount=permissionCount,queueCount=queuedMessages==null?0:queuedMessages.length();
+        int steps=page==null||page.steps==null?0:page.steps.length();
+        int files=page==null||page.changes==null?0:page.changes.optInt("files");
+        int added=page==null||page.changes==null?0:page.changes.optInt("added");
+        int deleted=page==null||page.changes==null?0:page.changes.optInt("deleted");
+        boolean running=page!=null&&page.running;
+        String state=pending!=null?"待核对":permissionsCount>0?"待处理":running?"正在思考":"已同步";
+        StringBuilder summary=new StringBuilder(state);
+        if(steps>0)summary.append(" · ").append(steps).append("步骤");
+        if(files>0)summary.append(" · ").append(files).append("文件 +").append(added).append("−").append(deleted);
+        if(queueCount>0)summary.append(" · 排队 ").append(queueCount);
+        statusTrayText.setText(summary.toString());
+        int color=pending!=null||permissionsCount>0?0xffffa62b:running?GREEN:connectionGood?GREEN:MUTED;
+        statusTrayDot.setTextColor(color);
+        statusTray.setContentDescription("会话状态："+summary+"，点击查看详情");
+        statusTray.setVisibility(View.VISIBLE);
+    }
+
+    /** One bottom sheet for all secondary conversation state. */
+    private void showStatusSheet(){
+        if(sessionId==null)return;
+        ChatCache cache=chatCaches.get(sessionKey);SessionPage page=cache==null?null:cache.page;
+        LinearLayout body=column();
+        if(pending!=null){
+            TextView heading=text("上次操作待核对",NativeUi.TITLE,INK);medium(heading);add(body,heading,-2);gap(body,6);
+            add(body,text(sending?"正在提交到电脑…":"电脑端尚未返回这次操作的结果，选择下一步处理。",NativeUi.CAPTION,MUTED),-2);gap(body,8);
+            LinearLayout actions=row();
+            Button requery=button("重查结果",false);requery.setOnClickListener(v->{sendPending();});actions.addView(requery,new LinearLayout.LayoutParams(0,dp(48),1));
+            Button withdraw=button("撤回并编辑",false);withdraw.setOnClickListener(v->{withdrawPending();});actions.addView(withdraw,new LinearLayout.LayoutParams(0,dp(48),1));add(body,actions,48);gap(body,10);
+        }
+        if(page!=null&&page.permissions!=null&&!page.permissions.isEmpty()){
+            add(body,text("需要你的确认 · "+page.permissions.size(),NativeUi.TITLE,INK),-2);gap(body,6);
+            for(SessionPage.Permission permission:page.permissions){
+                LinearLayout card=column();inset(card,12,8);card.setBackground(ui.surface(NativeUi.TINT,NativeUi.CORNER_ROW,true));
+                add(card,text(permission.needsInput?"有问题需要你回答":"需要确认 · "+permission.tool,NativeUi.CAPTION,INK),-2);gap(card,4);
+                if(permission.needsInput){Button answer=button("回答问题",true);add(card,answer,48);answer.setOnClickListener(v->showQuestion(permission));}
+                else{LinearLayout decisions=row();for(String decision:new String[]{"accept","decline"}){Button b=button(decision.equals("accept")?"本次允许":"拒绝",decision.equals("accept"));b.setEnabled(!sending&&pending==null);b.setContentDescription(b.getText()+" "+permission.tool);b.setOnClickListener(v->{try{submit("respond",new JSONObject().put("requestId",permission.id).put("decision",decision));}catch(Exception e){showError(e);}});decisions.addView(b,new LinearLayout.LayoutParams(0,dp(48),1));}add(card,decisions,48);}
+                add(body,card,-2);gap(body,6);
+            }
+        }
+        JSONArray queue=queuedMessages==null?new JSONArray():queuedMessages;
+        if(queue.length()>0){
+            add(body,text("排队消息 · "+queue.length(),NativeUi.TITLE,INK),-2);gap(body,6);
+            for(int i=0;i<queue.length();i++){JSONObject item=queue.optJSONObject(i);if(item==null)continue;JSONObject message=item.optJSONObject("body");String id=item.optString("id"),state=item.optString("state");String label=message==null?"图片消息":message.optString("text","图片消息");TextView line=text(label+(state.equals("unknown")?" · 结果待核对":""),NativeUi.LABEL,INK);line.setMaxLines(2);line.setEllipsize(TextUtils.TruncateAt.END);add(body,line,-2);LinearLayout row=row();for(String operation:new String[]{"recall","remove","sendnow"}){Button action=button(operation.equals("recall")?"撤回编辑":operation.equals("remove")?"删除":"立即发送",false);compact(action);action.setContentDescription(action.getText()+" "+id);action.setEnabled(!sending&&pending==null&&(state.equals("waiting")||state.equals("rejected")||state.equals("unknown")&&operation.equals("remove")));action.setOnClickListener(v->{try{JSONObject request=new JSONObject().put("operation",operation).put("queueId",id);if(state.equals("unknown")){alert().setTitle("已在电脑核对这条消息？").setPositiveButton("已核对，移除",(d,w)->{try{request.put("confirmed",true);submit("queue",request);}catch(Exception e){showError(e);}}).setNegativeButton("取消",null).show();}else submit("queue",request);}catch(Exception e){showError(e);}});row.addView(action,new LinearLayout.LayoutParams(0,dp(48),1));}add(body,row,48);gap(body,6);}
+        }
+        if(page!=null&&(page.steps!=null&&page.steps.length()>0||page.changes!=null&&page.changes.optInt("files")>0)){
+            int count=page.steps==null?0:page.steps.length();int files=page.changes==null?0:page.changes.optInt("files");
+            add(body,text("执行过程"+(count>0?" · "+count+" 项":"")+(files>0?" · "+files+" 个文件":""),NativeUi.TITLE,INK),-2);gap(body,6);
+            if(page.steps!=null)for(int i=0;i<page.steps.length();i++){JSONObject step=page.steps.optJSONObject(i);if(step==null)continue;add(body,text((step.optString("status").equals("completed")?"✓  ":"○  ")+step.optString("content",step.optString("step",step.optString("subject"))),NativeUi.LABEL,INK),-2);gap(body,4);}
+            if(files>0){Button changes=button("查看代码改动",false);add(body,changes,48);changes.setOnClickListener(v->showChanges(page));}
+        }
+        if(body.getChildCount()==0)add(body,emptyState("spark","当前没有待处理事项","执行中会在这里显示步骤、队列和审批"),-2);
+        ScrollView scroll=new NativeUi.InnerScroll(this);scroll.addView(body);LinearLayout wrapper=column();add(wrapper,scroll,Math.min(420,Math.max(96,64+body.getChildCount()*48)));Dialog dialog=sheet("会话状态","点击状态托盘可随时查看详情",wrapper);
+        if(body.getChildCount()>0)scroll.post(()->scroll.fullScroll(View.FOCUS_UP));
+    }
     private void showContextUsage(){ChatCache c=chatCaches.get(sessionKey);alert().setTitle("上下文窗口").setMessage(ContextRing.description(c==null||c.page==null?null:c.page.contextUsage)).setPositiveButton("知道了",null).show();}
     private void toggleComposerCollapsed(){composerCollapsed=!composerCollapsed;applyComposerCollapsed();}
     /** Folds or unfolds the chip row and points the caret at what the next tap will do. */
@@ -748,7 +827,14 @@ public final class MainActivity extends Activity {
             boolean withdraw=!stale&&permissionCount==0&&!withdrawable.isEmpty();
             actionHint.setText(stale?"上次操作待核对 · 点此处理":withdraw?"撤回刚才的消息并重新编辑":"");
             actionHint.setVisibility((stale||withdraw)&&!keyboardShown?View.VISIBLE:View.GONE);}
-        if(permissionScroll!=null)permissionScroll.setVisibility(keyboardShown?View.GONE:View.VISIBLE);if(pendingPanel!=null)pendingPanel.setVisibility(keyboardShown?View.GONE:View.VISIBLE);
+        // Secondary state is available from the single tray. Keep the old panels in
+        // the tree for stateful rendering and regression hooks, but do not stack them
+        // above the composer where they compete with the transcript.
+        if(permissionScroll!=null)permissionScroll.setVisibility(View.GONE);
+        if(pendingPanel!=null)pendingPanel.setVisibility(View.GONE);
+        if(queuePanel!=null)queuePanel.setVisibility(View.GONE);
+        if(taskPanel!=null)taskPanel.setVisibility(View.GONE);
+        refreshStatusTray();
     }
     private void jumpToLatest(){
         if(messageList==null)return;
@@ -855,10 +941,13 @@ public final class MainActivity extends Activity {
         // since it sits at the top and the end at the same time - left a handle with no
         // child under the finger and a tap that went nowhere. A disc that cannot act is
         // now drawn as a dimmed disc that still takes the tap and reports why.
-        if(atTop&&atEnd)atEnd=false;
-        applyTarget(floating.top,atTop);
-        applyTarget(floating.latest,atEnd);
-        return !atTop||!atEnd;
+        // The reader only needs one affordance: a latest capsule while away from the
+        // end. The old top/latest pair occupied two rows and remained visible at the
+        // bottom even though neither action helped the current context.
+        floating.top.setVisibility(View.GONE);
+        if(atEnd){floating.latest.setVisibility(View.GONE);return false;}
+        applyTarget(floating.latest,false);
+        return true;
     }
     /** Dims a disc that has nowhere to jump, without taking it out of the hit test.
      *
@@ -1005,7 +1094,7 @@ public final class MainActivity extends Activity {
         ChatCache previous=before==null?chatCaches.get(key):null;
         // An idle conversation that has not changed asks the computer for nothing.
         String known=previous!=null&&previous.page!=null&&!previous.page.running?previous.page.token:"";
-        final String path="/api/native/"+backend+"/"+id+(before!=null?"?before="+before:(known.isEmpty()?"":"?known="+Uri.encode(known)));
+        final String path="/api/native/"+backend+"/"+id+(before!=null?"?before="+before:(known.isEmpty()?"":"?known="+Uri.encode(known)+"&wait=15000"));
         final long identityVersion=++identityClock;final int ticket=before==null?++pollTicket:++historyTicket;
         ExecutorService pool=before!=null?historyWorkers:liveWorkers;
         pool.execute(()->{try{JSONObject raw=request(host,credential,path,null);
@@ -1013,7 +1102,7 @@ public final class MainActivity extends Activity {
                 if(ticket!=pollTicket||isDestroyed()||!host.equals(origin)||!credential.equals(token))return;pollEpoch=-1;if(generation!=epoch)return;
                 JSONObject session=raw.optJSONObject("session");if(session!=null)syncIdentity(backend,id,session.optString("title"),session.optString("cwd"),identityVersion);
                 JSONArray queue=raw.optJSONArray("queue");if(queue!=null)queuedMessages=queue;renderQueue();
-                connection("已同步",true);schedulePoll(generation,id,3000);
+                connection("已同步",true);schedulePoll(generation,id,350);
             });return;}
             SessionPage result=SessionPage.prepare(raw);
             if(before==null&&!result.revision.equals(writtenRevisions.put(host+key,result.revision)))ConversationCache.write(this,host+credential+key,raw);

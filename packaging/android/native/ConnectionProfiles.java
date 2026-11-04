@@ -12,6 +12,12 @@ final class ConnectionProfiles {
     interface Transport {JSONObject request(String origin,String token,String path,JSONObject body)throws Exception;}
     static class HttpFailure extends IOException {final int code;final boolean routeFailure;HttpFailure(int code,String text){this(code,text,code==401||code>=500);}HttpFailure(int code,String text,boolean routeFailure){super(text);this.code=code;this.routeFailure=routeFailure;}}
     private static final HashMap<String,Long> unhealthy=new HashMap<>();
+    /** A recently identity-checked route can carry the next request directly. */
+    private static final HashMap<String,Long> validated=new HashMap<>();
+    private static String routeKey(String origin,String token){return origin+"\n"+token;}
+    private static synchronized boolean recentlyValidated(String origin,String token){return validated.getOrDefault(routeKey(origin,token),0L)>android.os.SystemClock.elapsedRealtime();}
+    private static synchronized void markValidated(String origin,String token){if(validated.size()>64)validated.clear();validated.put(routeKey(origin,token),android.os.SystemClock.elapsedRealtime()+30000);}
+    private static synchronized void forgetValidated(String origin,String token){validated.remove(routeKey(origin,token));}
     private static synchronized boolean cooling(JSONObject route){return unhealthy.getOrDefault(route.optString("origin"),0L)>android.os.SystemClock.elapsedRealtime();}
     private static synchronized void health(JSONObject route,boolean good){String key=route.optString("origin");if(good)unhealthy.remove(key);else {if(unhealthy.size()>32)unhealthy.clear();unhealthy.put(key,android.os.SystemClock.elapsedRealtime()+15000);}}
     private static boolean retryable(IOException error){return !(error instanceof HttpFailure)||((HttpFailure)error).routeFailure;}
@@ -44,6 +50,16 @@ final class ConnectionProfiles {
             catch(IOException e){if(!path.equals("/api/pair")||body==null||body.optString("requestId").length()<32||!retryable(e)||e instanceof HttpFailure&&((HttpFailure)e).code==401)throw e;pause();return net.request(origin,token,path,body);}
         }
         JSONObject root=read(c);ArrayList<JSONObject> candidates=candidates(root,origin,token);Exception last=null;JSONObject chosen=null,result=null;
+        // Route reuse removes the extra /api/device round trip for the common case.
+        // A POST is never replayed after a transport failure because its outcome may
+        // already be committed on the desktop; reads may fall back to the normal
+        // candidate search when the cached route has gone stale.
+        for(JSONObject route:candidates){
+            String host=route.optString("origin"),secret=route.optString("token");
+            if(!origin.equals(host)||!token.equals(secret)||!recentlyValidated(host,secret))continue;
+            try{JSONObject direct=net.request(host,secret,path,body);health(route,true);return direct;}
+            catch(IOException e){forgetValidated(host,secret);health(route,false);if(body!=null)throw e;last=e;}
+        }
         // A recently broken route does not delay a working alternative on every poll.
         candidates.sort((a,b)->Boolean.compare(cooling(a),cooling(b)));HashSet<String> unauthorized=new HashSet<>();
         for(int round=0;round<2&&chosen==null;round++){
@@ -61,7 +77,7 @@ final class ConnectionProfiles {
                 result=net.request(host,secret,body==null?path:"/api/device",null);
                 String reported=result.optString("computerId");
                 if(!expected.isEmpty()&&!reported.isEmpty()&&!expected.equals(reported))throw new SecurityException("电脑身份不匹配，请重新扫码");
-                health(route,true);chosen=route;break;
+                health(route,true);markValidated(host,secret);chosen=route;break;
             }catch(IOException e){last=e;if(!retryable(e))throw e;health(route,false);if(e instanceof HttpFailure&&((HttpFailure)e).code==401)unauthorized.add(route.optString("token"));}
         }
         }
