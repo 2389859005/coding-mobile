@@ -59,11 +59,14 @@ public final class MainActivity extends Activity {
     /** A single glanceable status row replaces the stack of inline task cards. */
     private LinearLayout statusTray;
     private TextView statusTrayText;
-    private TextView statusTrayDot;
+    private ImageView statusTrayDot,statusTrayArrow;
+    private FrameLayout statusOverlay;
+    private boolean statusOverlayExpanded=false;
     private boolean compactStatusDock=true;
     private int pollTicket=0,historyTicket=0;
     private final java.util.concurrent.ConcurrentHashMap<Thread,HttpURLConnection> liveConnections=new java.util.concurrent.ConcurrentHashMap<>();
     private volatile Thread eventThread;
+    private volatile Thread listEventThread;
     private final ExecutorService liveWorkers=Executors.newFixedThreadPool(2,r->new Thread(r,"conversation-live"));
     /** Paging back through history is a user-initiated action, so it must not queue
      * behind the 15-second poll. Sharing liveWorkers meant a slow poll could hold
@@ -122,7 +125,7 @@ public final class MainActivity extends Activity {
     private final Map<String,ChatCache> chatCaches=java.util.Collections.synchronizedMap(new LinkedHashMap<String,ChatCache>(8,.75f,false){
         protected boolean removeEldestEntry(Map.Entry<String,ChatCache> e){return size()>6;}
     });
-    private static final class ListCache { JSONArray rows=new JSONArray(); long loaded=0; boolean loading=false,grouped=true,connected=false; int first=0,top=0; String error="",query="",project="",notice=""; final java.util.Set<String> collapsed=java.util.concurrent.ConcurrentHashMap.newKeySet(); }
+    private static final class ListCache { JSONArray rows=new JSONArray(); long loaded=0; boolean loading=false,grouped=true,connected=false; int first=0,top=0; String error="",query="",project="",notice="",token=""; final java.util.Set<String> collapsed=java.util.concurrent.ConcurrentHashMap.newKeySet(); }
     private static final class ChatCache { SessionPage page; int first=-1,top=0; String title="",cwd="",project="",draft=""; boolean followingLatest=true; Boolean running=null; String completed=""; JSONObject catalog; final java.util.Set<String> plugins=java.util.concurrent.ConcurrentHashMap.newKeySet(); final java.util.List<JSONObject> images=java.util.Collections.synchronizedList(new ArrayList<JSONObject>()); final java.util.Set<String> expanded=java.util.concurrent.ConcurrentHashMap.newKeySet(),collapsed=java.util.concurrent.ConcurrentHashMap.newKeySet(); }
 
     private String origin="",token="",backend="claude",sessionId=null,lastMessages="";
@@ -204,7 +207,7 @@ public final class MainActivity extends Activity {
         if(token.isEmpty()){Button scan=ui.iconButton("scan","扫描配对二维码");appBar.addView(scan,new LinearLayout.LayoutParams(dp(48),dp(48)));scan.setOnClickListener(v->scan());}
         else{Button settings=ui.iconButton("settings","设置");appBar.addView(settings,new LinearLayout.LayoutParams(dp(48),dp(48)));settings.setOnClickListener(v->openSettings());}
     }
-    private void connection(String label,boolean good){connectionText=label;connectionGood=good;if(connectionLabel!=null&&System.currentTimeMillis()>=appStatusUntil){connectionLabel.setText("●  "+label);connectionLabel.setTextColor(good?GREEN:MUTED);}}
+    private void connection(String label,boolean good){connectionText=label;connectionGood=good;if(connectionLabel!=null&&System.currentTimeMillis()>=appStatusUntil){connectionLabel.setText(label);connectionLabel.setTextColor(good?GREEN:MUTED);ui.leading(connectionLabel,"dot",good?GREEN:MUTED,NativeUi.GLYPH_INLINE);}}
     private TextWatcher changed(Runnable change){return new TextWatcher(){public void beforeTextChanged(CharSequence s,int st,int count,int after){}public void onTextChanged(CharSequence s,int st,int before,int count){change.run();}public void afterTextChanged(Editable e){}};}
 
     @Override public void onCreate(Bundle saved){
@@ -273,15 +276,17 @@ public final class MainActivity extends Activity {
 
     private void reset(){
         closeGit();
+        if(statusOverlay!=null){stage.removeView(statusOverlay);statusOverlay=null;}
+        statusOverlayExpanded=false;
         if(optionsDismiss!=null){stage.removeView(optionsDismiss);optionsDismiss=null;}if(inlineOptions!=null)stage.removeView(inlineOptions);optionAnchor=null;if(applicationMenu!=null){applicationMenu.dismiss();applicationMenu=null;}queuePanel=null;queuedMessages=new JSONArray();queueExpanded=false;
         if(displayedListKey!=null&&sessionList!=null){ListCache c=listCaches.get(displayedListKey);if(c!=null){c.first=sessionList.getFirstVisiblePosition();c.top=sessionList.getChildCount()>0?sessionList.getChildAt(0).getTop():0;}}
         if(sessionKey!=null){ChatCache c=chatCaches.get(sessionKey);if(c!=null){if(composer!=null)c.draft=composer.getText().toString();if(messageList!=null&&pageBefore==null){c.first=messageList.getFirstVisiblePosition();c.top=messageList.getChildCount()>0?messageList.getChildAt(0).getTop()-messageList.getPaddingTop():0;c.followingLatest=followingLatest;}}}
-        navigationVersion++;selectingText=false;catalogTicket++;selectedModel="";inlineOptions=null;expandedOption="";epoch++;pollTicket++;historyTicket++;pollEpoch=-1;for(HttpURLConnection active:liveConnections.values())active.disconnect();eventThread=null;permissionRevision="";taskRevision="";scrolling=false;deferredPage=null;requestedHeader=null;if(questionDialog!=null){questionDialog.dismiss();questionDialog=null;}activeQuestion="";if(nextPoll!=null)handler.removeCallbacks(nextPoll);nextPoll=null;sessionId=null;sessionKey=null;displayedListKey=null;pageBefore=null;historyLoading=false;lastMessages="";
+        navigationVersion++;selectingText=false;catalogTicket++;selectedModel="";inlineOptions=null;expandedOption="";epoch++;pollTicket++;historyTicket++;pollEpoch=-1;for(HttpURLConnection active:liveConnections.values())active.disconnect();eventThread=null;listEventThread=null;permissionRevision="";taskRevision="";scrolling=false;deferredPage=null;requestedHeader=null;if(questionDialog!=null){questionDialog.dismiss();questionDialog=null;}activeQuestion="";if(nextPoll!=null)handler.removeCallbacks(nextPoll);nextPoll=null;sessionId=null;sessionKey=null;displayedListKey=null;pageBefore=null;historyLoading=false;lastMessages="";
         if(fileBrowser!=null){fileBrowser.close();fileBrowser=null;}fileBrowserKey="";sessionSignature="";withdrawable="";
         // The image picker returns through onActivityResult long after reset(); a
         // stale key would silently drop the user's selection.
         pickerKey="";uploading=false;
-        pendingPanel=null;sendButton=null;status=null;composer=null;sessionList=null;sessionAdapter=null;messageList=null;messageAdapter=null;permissions=null;statusTray=null;statusTrayText=null;statusTrayDot=null;
+        pendingPanel=null;sendButton=null;status=null;composer=null;sessionList=null;sessionAdapter=null;messageList=null;messageAdapter=null;permissions=null;statusTray=null;statusTrayText=null;statusTrayDot=null;statusTrayArrow=null;
         appStatusUntil=0;connectionLabel=null;search=null;historyBar=null;emptyState=null;composerScroll=null;actionHint=null;permissionCount=0;followingLatest=true;chatPath="";hasEarlier=false;
         chatHeader=null;attachmentRow=null;fastScroller=null;headerHidden=false;floating=null;taskPanel=null;sessionTitle=null;
         // The composer's fold state is per-session chrome; leaving the stale references
@@ -424,9 +429,12 @@ public final class MainActivity extends Activity {
     /** Open the one-way event channel used while a conversation is visible. */
     private HttpURLConnection openEventStream(String address,String credential,String path)throws Exception{
         if(!TrustedOrigin.valid(address))throw new IOException("连接地址不受支持，请重新扫码绑定");
-        HttpURLConnection c=EmbeddedNetwork.open(this,address+path);c.setConnectTimeout(7000);c.setReadTimeout(0);c.setInstanceFollowRedirects(false);
-        c.setRequestProperty("Accept","text/event-stream");c.setRequestProperty("Accept-Encoding","identity");c.setRequestProperty("Cache-Control","no-cache");c.setRequestProperty("Connection","keep-alive");c.setRequestProperty("Origin",address);if(!credential.isEmpty())c.setRequestProperty("Authorization","Bearer "+credential);
-        int code=c.getResponseCode();if(code>=300){c.disconnect();throw new ApiError(code,"实时通道暂不可用");}return c;
+        ArrayList<JSONObject> routes=new ArrayList<>();try{routes=ConnectionProfiles.candidates(ConnectionProfiles.read(this),address,credential);}catch(Exception ignored){}if(routes.isEmpty())try{routes.add(new JSONObject().put("origin",address).put("token",credential));}catch(Exception ignored){}
+        Exception last=null;for(JSONObject route:routes){String host=route.optString("origin",address),secret=route.optString("token",credential);if(!TrustedOrigin.valid(host))continue;HttpURLConnection c=null;try{c=EmbeddedNetwork.open(this,host+path);c.setConnectTimeout(7000);c.setReadTimeout(0);c.setInstanceFollowRedirects(false);
+            c.setRequestProperty("Accept","text/event-stream");c.setRequestProperty("Accept-Encoding","identity");c.setRequestProperty("Cache-Control","no-cache");c.setRequestProperty("Connection","keep-alive");c.setRequestProperty("Origin",host);if(!secret.isEmpty())c.setRequestProperty("Authorization","Bearer "+secret);
+            int code=c.getResponseCode();if(code>=300){c.disconnect();throw new ApiError(code,"实时通道暂不可用");}return c;
+        }catch(Exception e){last=e;if(c!=null)c.disconnect();}}
+        if(last!=null)throw last;throw new IOException("实时通道暂不可用");
     }
 
     /** Start a persistent stream; a failed stream falls back to one normal poll. */
@@ -449,7 +457,7 @@ public final class MainActivity extends Activity {
                     if(data.length()>0)applyEventPage(new JSONObject(data.toString()),generation,id,kind,host,credential,key);
                 }
             }catch(Exception error){
-                if(!paused&&!isDestroyed()&&generation==epoch&&host.equals(origin)&&credential.equals(token))runOnUiThread(()->{connection("实时通道重连中…",false);schedulePoll(generation,id,500);});
+                if(!paused&&!isDestroyed()&&generation==epoch&&host.equals(origin)&&credential.equals(token))runOnUiThread(()->{connection("实时通道重连中…",false);handler.postDelayed(()->startEventStream(generation,id),500);schedulePoll(generation,id,3000);});
             }finally{liveConnections.remove(Thread.currentThread());if(connection!=null)connection.disconnect();if(eventThread==Thread.currentThread())eventThread=null;}
         },"conversation-live");
         eventThread=stream;stream.start();
@@ -468,6 +476,46 @@ public final class MainActivity extends Activity {
                 syncIdentity(kind,id,result.title,result.cwd,++identityClock);renderSession(result,false);connection(result.running?"正在思考…":"已同步",result.connected);
             });
         }catch(Exception ignored){}
+    }
+
+    /** Start the persistent catalog stream used by a backend list page. */
+    private void startListEventStream(int generation,String kind){
+        if(paused||isDestroyed()||generation!=epoch||!kind.equals(displayedListKey))return;
+        Thread previous=listEventThread;if(previous!=null&&previous.isAlive())return;
+        final String host=origin,credential=token,key=kind,route="/api/native/"+kind+"/events";
+        ListCache cached=listCaches.get(kind);String known=cached==null?"":cached.token;
+        Thread stream=new Thread(()->{
+            HttpURLConnection connection=null;
+            try{
+                connection=openEventStream(host,credential,route+(known.isEmpty()?"":"?known="+Uri.encode(known)));
+                liveConnections.put(Thread.currentThread(),connection);
+                try(BufferedReader reader=new BufferedReader(new InputStreamReader(connection.getInputStream(),"UTF-8"))){
+                    String line;StringBuilder data=new StringBuilder();
+                    while(!paused&&!isDestroyed()&&generation==epoch&&host.equals(origin)&&credential.equals(token)&&kind.equals(displayedListKey)&&(line=reader.readLine())!=null){
+                        if(line.startsWith("data:")){if(data.length()>0)data.append('\n');data.append(line.substring(5).trim());}
+                        else if(line.isEmpty()&&data.length()>0){JSONObject value=new JSONObject(data.toString());data.setLength(0);applyListEventPage(value,generation,kind,host,credential);}
+                    }
+                    if(data.length()>0)applyListEventPage(new JSONObject(data.toString()),generation,kind,host,credential);
+                }
+            }catch(Exception error){
+                if(!paused&&!isDestroyed()&&generation==epoch&&host.equals(origin)&&credential.equals(token)&&kind.equals(displayedListKey))handler.postDelayed(()->startListEventStream(generation,kind),500);
+            }finally{liveConnections.remove(Thread.currentThread());if(connection!=null)connection.disconnect();if(listEventThread==Thread.currentThread())listEventThread=null;}
+        },"catalog-live");
+        listEventThread=stream;stream.start();
+    }
+
+    private void applyListEventPage(JSONObject raw,int generation,String kind,String host,String credential){
+        if(raw==null||raw.optBoolean("unchanged",false))return;
+        ListCache cache=listCaches.get(kind);if(cache==null)return;
+        JSONArray rows=raw.optJSONArray("sessions");if(rows==null)rows=new JSONArray();
+        cache.rows=rows;cache.loaded=System.currentTimeMillis();cache.loading=false;cache.connected=raw.optBoolean("connected",false);cache.token=raw.optString("token",cache.token);cache.error="";
+        cache.notice=raw.optString("notice","");JSONArray errors=raw.optJSONArray("errors");if(errors!=null&&errors.length()>0)cache.notice="部分会话暂不可用，可刷新重试";
+        ConversationCache.write(this,host+credential+"list:"+kind,raw);
+        for(int i=0;i<rows.length();i++){JSONObject row=rows.optJSONObject(i);if(row!=null)syncIdentity(kind,row.optString("id"),row.optString("title"),row.optString("cwd"),++identityClock);}
+        runOnUiThread(()->{
+            if(isDestroyed()||paused||generation!=epoch||!host.equals(origin)||!credential.equals(token)||!kind.equals(displayedListKey)||sessionList==null)return;
+            cache.first=sessionList.getFirstVisiblePosition();cache.top=sessionList.getChildCount()>0?sessionList.getChildAt(0).getTop():0;showSessions(cache);
+        });
     }
 
     private void fetch(String path,JSONObject body,int generation,Done done){final String host=origin,credential=token;
@@ -528,7 +576,7 @@ public final class MainActivity extends Activity {
         if(key.equals("settings")){settings();return;}
         getSharedPreferences("ui",0).edit().putString("backend",key).putBoolean("resumeChat",false).apply();
         displayedListKey=key;ListCache cache=listCaches.get(key);if(cache==null){cache=new ListCache();listCaches.put(key,cache);}
-        final ListCache current=cache;if(cache.loaded==0){final String cacheKey=origin+token+"list:"+key;workers.execute(()->{JSONObject raw=ConversationCache.read(this,cacheKey);if(raw!=null)runOnUiThread(()->{if(current.loaded==0&&raw.optJSONArray("sessions")!=null){current.rows=raw.optJSONArray("sessions");current.loaded=1;for(int i=0;i<current.rows.length();i++){JSONObject r=current.rows.optJSONObject(i);if(r!=null)syncIdentity(key,r.optString("id"),r.optString("title"),r.optString("cwd"),0);}if(key.equals(displayedListKey))showSessions(current);}});});}
+        final ListCache current=cache;if(cache.loaded==0){final String cacheKey=origin+token+"list:"+key;workers.execute(()->{JSONObject raw=ConversationCache.read(this,cacheKey);if(raw!=null)runOnUiThread(()->{if(current.loaded==0&&raw.optJSONArray("sessions")!=null){current.rows=raw.optJSONArray("sessions");current.loaded=System.currentTimeMillis();current.token=raw.optString("token","");current.connected=raw.optBoolean("connected",false);current.notice=raw.optString("notice","");for(int i=0;i<current.rows.length();i++){JSONObject r=current.rows.optJSONObject(i);if(r!=null)syncIdentity(key,r.optString("id"),r.optString("title"),r.optString("cwd"),0);}if(key.equals(displayedListKey))showSessions(current);}});});}
         appBar.setVisibility(View.GONE);LinearLayout heading=column();inset(heading,20,4);LinearLayout top=row();TextView providerTitle=text(providerName(key),NativeUi.HEADING,INK);top.addView(providerTitle,new LinearLayout.LayoutParams(-2,-2));
         // The chevron is a glyph, not the "⌄" character: that codepoint is missing
         // from several Android system fonts and fell back to a box.
@@ -553,7 +601,7 @@ public final class MainActivity extends Activity {
         sessionAdapter=new SessionAdapter();sessionList.setAdapter(sessionAdapter);listArea.addView(sessionList,new FrameLayout.LayoutParams(-1,-1));
         emptyState=column();emptyState.setGravity(Gravity.CENTER);inset(emptyState,32,24);emptyState.addView(ui.icon("chat",NativeUi.LINE,NativeUi.GLYPH_DISPLAY),new LinearLayout.LayoutParams(dp(40),dp(40)));gap(emptyState,14);emptyTitle=text("",NativeUi.TITLE,INK);medium(emptyTitle);emptyState.addView(emptyTitle);gap(emptyState,NativeUi.SPACE_INLINE);emptyDetail=text("",NativeUi.LABEL,MUTED);emptyDetail.setGravity(Gravity.CENTER);add(emptyState,emptyDetail,-2);listArea.addView(emptyState,new FrameLayout.LayoutParams(-1,-1));emptyState.setVisibility(View.GONE);screen.addView(listArea,new LinearLayout.LayoutParams(-1,0,1));
         sessionList.setOnItemClickListener((parent,view,position,itemId)->{CatalogItem item=sessionAdapter.items.get(position);if(item.archive){archivedSessions();return;}if(item.header){if(!current.collapsed.add(item.path))current.collapsed.remove(item.path);current.first=sessionList.getFirstVisiblePosition();current.top=sessionList.getChildCount()>0?sessionList.getChildAt(0).getTop():0;showSessions(current);}else{((InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(search.getWindowToken(),0);openSession(item.row.optString("id"),item.row.optString("title"));}});
-        showSessions(cache);loadSessions(key,false);final int listGeneration=epoch;handler.postDelayed(new Runnable(){public void run(){if(isDestroyed()||isFinishing()||listGeneration!=epoch||!key.equals(displayedListKey))return;if(!paused)loadSessions(key,false);handler.postDelayed(this,15000);}},15000);
+        showSessions(cache);if(cache.loaded==0||!cache.error.isEmpty())loadSessions(key,false);startListEventStream(epoch,key);
     }
     private String sessionSignature="";
     private final java.util.concurrent.ConcurrentHashMap<String,String> writtenRevisions=new java.util.concurrent.ConcurrentHashMap<>();
@@ -566,7 +614,7 @@ public final class MainActivity extends Activity {
         projectButton.setText(cache.project.isEmpty()?"全部项目":projectName(cache.project));projectButton.setContentDescription("筛选项目："+(cache.project.isEmpty()?"全部项目":cache.project));groupButton.setText(cache.grouped?"按项目":"最近会话");
         status.setText(cache.loaded==0?"正在读取电脑会话…":sessionAdapter.matches+" 条会话"+(cache.loading?" · 更新中":"")+(cache.notice.isEmpty()?"":" · "+cache.notice));status.setTextColor(MUTED);
         connection(cache.loaded>0?"已缓存":"连接中",false);
-        if(cache.loaded>0&&System.currentTimeMillis()-cache.loaded<15000&&cache.error.isEmpty())connection(cache.connected?providerName(backend)+" 已连接":"助手可达 · 应用未连接",cache.connected);
+        if(cache.loaded>0&&cache.error.isEmpty())connection(cache.connected?providerName(backend)+" 已连接":"助手可达 · 应用未连接",cache.connected);
         if(!cache.error.isEmpty()){status.setText(cache.error+(cache.loaded>0?" · 显示上次记录":""));status.setTextColor(NativeUi.RED);connection("连接中断",false);}
         refreshButton.setEnabled(!cache.loading);refreshButton.setAlpha(cache.loading?.4f:1f);
         // The adapter always carries the archive entry, so its count is never zero and
@@ -613,7 +661,7 @@ public final class MainActivity extends Activity {
             JSONObject r=data.row;label.setText(r.optString("title","未命名会话"));String surface=r.optString("backend",backend);String active=r.optString("status","");boolean running=active.equals("active")||active.equals("running")||active.equals("inProgress");
             // Name the project on every row: with the same title in two directories
             // the path is the only way to tell two conversations apart.
-            meta.setText((cache.grouped||data.path.isEmpty()?"":projectName(data.path)+" · ")+(r.has("turnCount")?r.optInt("turnCount")+" 轮对话":""));meta.setVisibility(meta.getText().length()==0?View.GONE:View.VISIBLE);date.setText(r.optBoolean("archived")?"已归档":running?"●  进行中":sessionDate(r));date.setTextColor(running?GREEN:MUTED);item.setOnClickListener(v->openSession(r.optString("id"),r.optString("title")));item.setOnLongClickListener(v->{sessionActions(r);return true;});return item;
+            meta.setText((cache.grouped||data.path.isEmpty()?"":projectName(data.path)+" · ")+(r.has("turnCount")?r.optInt("turnCount")+" 轮对话":""));meta.setVisibility(meta.getText().length()==0?View.GONE:View.VISIBLE);date.setText(r.optBoolean("archived")?"已归档":running?"进行中":sessionDate(r));date.setTextColor(running?GREEN:MUTED);if(running)ui.leading(date,"dot",GREEN,NativeUi.GLYPH_INLINE);else date.setCompoundDrawables(null,null,null,null);item.setOnClickListener(v->openSession(r.optString("id"),r.optString("title")));item.setOnLongClickListener(v->{sessionActions(r);return true;});return item;
         }
     }
     private void archivedSessions(){
@@ -685,7 +733,7 @@ public final class MainActivity extends Activity {
             else if(e.getActionMasked()==1||e.getActionMasked()==3){scrolling=false;handler.postDelayed(()->{if(isDestroyed()||scrolling)return;finishScroll();scheduleHeaderReveal();},100);}return false;}});
         messageList.setOnScrollListener(new AbsListView.OnScrollListener(){public void onScrollStateChanged(AbsListView v,int state){scrolling=state!=SCROLL_STATE_IDLE;if(!scrolling){finishScroll();scheduleHeaderReveal();}}
             public void onScroll(AbsListView v,int first,int visible,int total){if(fastScroller!=null)fastScroller.invalidate();updateNavigation();if(scrolling&&total>0){View last=v.getChildAt(v.getChildCount()-1);followingLatest=first+visible>=total&&last!=null&&last.getBottom()<=v.getHeight()-v.getPaddingBottom()+dp(12);}}});screen.addView(transcript,new LinearLayout.LayoutParams(-1,0,1));
-        LinearLayout dock=column();dock.setPadding(dp(16),0,dp(16),dp(8));add(dock,buildStatusTray(),48);actionHint=button("",false);actionHint.setTextSize(NativeUi.CAPTION);actionHint.setTextColor(GREEN);actionHint.setBackground(ui.touch(NativeUi.TINT,NativeUi.CORNER_ROW,false));ui.leading(actionHint,"shield",GREEN,NativeUi.GLYPH_INLINE);add(dock,actionHint,48);actionHint.setVisibility(View.GONE);actionHint.setOnClickListener(v->{
+        LinearLayout dock=column();dock.setPadding(dp(16),0,dp(16),dp(8));LinearLayout tray=buildStatusTray();LinearLayout.LayoutParams trayLp=new LinearLayout.LayoutParams(-2,dp(40));trayLp.gravity=Gravity.LEFT;dock.addView(tray,trayLp);actionHint=button("",false);actionHint.setTextSize(NativeUi.CAPTION);actionHint.setTextColor(GREEN);actionHint.setBackground(ui.touch(NativeUi.TINT,NativeUi.CORNER_ROW,false));ui.leading(actionHint,"shield",GREEN,NativeUi.GLYPH_INLINE);add(dock,actionHint,48);actionHint.setVisibility(View.GONE);actionHint.setOnClickListener(v->{
             if(pending!=null){
                 // Every path out of a stale submission goes through here, including
                 // "I checked the computer and it is done", which simply drops it.
@@ -782,11 +830,10 @@ public final class MainActivity extends Activity {
     /** Build the compact state tray shown immediately above the composer. */
     private LinearLayout buildStatusTray(){
         LinearLayout tray=row();tray.setGravity(Gravity.CENTER_VERTICAL);
-        tray.setPadding(dp(12),0,dp(8),0);
-        tray.setBackground(ui.touch(NativeUi.SOFT,NativeUi.CORNER_ROW,true));
-        statusTrayDot=text("●",NativeUi.CAPTION,GREEN);statusTrayDot.setGravity(Gravity.CENTER);tray.addView(statusTrayDot,new LinearLayout.LayoutParams(dp(24),dp(40)));
-        statusTrayText=text("正在读取会话状态…",NativeUi.CAPTION,INK);single(statusTrayText);tray.addView(statusTrayText,new LinearLayout.LayoutParams(0,dp(48),1));
-        ImageView arrow=ui.icon("right",MUTED,NativeUi.GLYPH_INLINE);tray.addView(arrow,new LinearLayout.LayoutParams(dp(20),dp(20)));
+        tray.setPadding(dp(10),0,dp(8),0);tray.setMinimumWidth(0);tray.setBackground(ui.touch(NativeUi.SOFT,NativeUi.CORNER_CHIP,true));
+        statusTrayDot=ui.icon("dot",GREEN,NativeUi.GLYPH_INLINE);statusTrayDot.setContentDescription("连接状态");tray.addView(statusTrayDot,new LinearLayout.LayoutParams(dp(20),dp(36)));
+        statusTrayText=text("正在读取会话状态…",NativeUi.CAPTION,INK);single(statusTrayText);statusTrayText.setMaxWidth(dp(280));tray.addView(statusTrayText,new LinearLayout.LayoutParams(-2,dp(36)));
+        statusTrayArrow=ui.icon("right",MUTED,NativeUi.GLYPH_INLINE);tray.addView(statusTrayArrow,new LinearLayout.LayoutParams(dp(20),dp(20)));
         tray.setContentDescription("会话状态，点击查看审批、队列和执行步骤");
         tray.setOnClickListener(v->showStatusSheet());
         statusTray=tray;return tray;
@@ -809,48 +856,38 @@ public final class MainActivity extends Activity {
         if(queueCount>0)summary.append(" · 排队 ").append(queueCount);
         statusTrayText.setText(summary.toString());
         int color=pending!=null||permissionsCount>0?0xffffa62b:running?GREEN:connectionGood?GREEN:MUTED;
-        statusTrayDot.setTextColor(color);
+        statusTrayDot.setImageDrawable(new NativeUi.Symbol("dot",color,dp(NativeUi.GLYPH_INLINE)));
         statusTray.setContentDescription("会话状态："+summary+"，点击查看详情");
         statusTray.setVisibility(View.VISIBLE);
+        if(statusOverlayExpanded)renderStatusOverlay();
     }
 
-    /** One bottom sheet for all secondary conversation state. */
+    /** Toggle the compact, in-page status overlay; no dialog window is needed. */
     private void showStatusSheet(){
         if(sessionId==null)return;
-        ChatCache cache=chatCaches.get(sessionKey);SessionPage page=cache==null?null:cache.page;
-        LinearLayout body=column();
-        if(pending!=null){
-            TextView heading=text("上次操作待核对",NativeUi.TITLE,INK);medium(heading);add(body,heading,-2);gap(body,6);
-            add(body,text(sending?"正在提交到电脑…":"电脑端尚未返回这次操作的结果，选择下一步处理。",NativeUi.CAPTION,MUTED),-2);gap(body,8);
-            LinearLayout actions=row();
-            Button requery=button("重查结果",false);requery.setOnClickListener(v->{sendPending();});actions.addView(requery,new LinearLayout.LayoutParams(0,dp(48),1));
-            Button withdraw=button("撤回并编辑",false);withdraw.setOnClickListener(v->{withdrawPending();});actions.addView(withdraw,new LinearLayout.LayoutParams(0,dp(48),1));add(body,actions,48);gap(body,10);
-        }
-        if(page!=null&&page.permissions!=null&&!page.permissions.isEmpty()){
-            add(body,text("需要你的确认 · "+page.permissions.size(),NativeUi.TITLE,INK),-2);gap(body,6);
-            for(SessionPage.Permission permission:page.permissions){
-                LinearLayout card=column();inset(card,12,8);card.setBackground(ui.surface(NativeUi.TINT,NativeUi.CORNER_ROW,true));
-                add(card,text(permission.needsInput?"有问题需要你回答":"需要确认 · "+permission.tool,NativeUi.CAPTION,INK),-2);gap(card,4);
-                if(permission.needsInput){Button answer=button("回答问题",true);add(card,answer,48);answer.setOnClickListener(v->showQuestion(permission));}
-                else{LinearLayout decisions=row();for(String decision:new String[]{"accept","decline"}){Button b=button(decision.equals("accept")?"本次允许":"拒绝",decision.equals("accept"));b.setEnabled(!sending&&pending==null);b.setContentDescription(b.getText()+" "+permission.tool);b.setOnClickListener(v->{try{submit("respond",new JSONObject().put("requestId",permission.id).put("decision",decision));}catch(Exception e){showError(e);}});decisions.addView(b,new LinearLayout.LayoutParams(0,dp(48),1));}add(card,decisions,48);}
-                add(body,card,-2);gap(body,6);
-            }
-        }
-        JSONArray queue=queuedMessages==null?new JSONArray():queuedMessages;
-        if(queue.length()>0){
-            add(body,text("排队消息 · "+queue.length(),NativeUi.TITLE,INK),-2);gap(body,6);
-            for(int i=0;i<queue.length();i++){JSONObject item=queue.optJSONObject(i);if(item==null)continue;JSONObject message=item.optJSONObject("body");String id=item.optString("id"),state=item.optString("state");String label=message==null?"图片消息":message.optString("text","图片消息");TextView line=text(label+(state.equals("unknown")?" · 结果待核对":""),NativeUi.LABEL,INK);line.setMaxLines(2);line.setEllipsize(TextUtils.TruncateAt.END);add(body,line,-2);LinearLayout row=row();for(String operation:new String[]{"recall","remove","sendnow"}){Button action=button(operation.equals("recall")?"撤回编辑":operation.equals("remove")?"删除":"立即发送",false);compact(action);action.setContentDescription(action.getText()+" "+id);action.setEnabled(!sending&&pending==null&&(state.equals("waiting")||state.equals("rejected")||state.equals("unknown")&&operation.equals("remove")));action.setOnClickListener(v->{try{JSONObject request=new JSONObject().put("operation",operation).put("queueId",id);if(state.equals("unknown")){alert().setTitle("已在电脑核对这条消息？").setPositiveButton("已核对，移除",(d,w)->{try{request.put("confirmed",true);submit("queue",request);}catch(Exception e){showError(e);}}).setNegativeButton("取消",null).show();}else submit("queue",request);}catch(Exception e){showError(e);}});row.addView(action,new LinearLayout.LayoutParams(0,dp(48),1));}add(body,row,48);gap(body,6);}
-        }
-        if(page!=null&&(page.steps!=null&&page.steps.length()>0||page.changes!=null&&page.changes.optInt("files")>0)){
-            int count=page.steps==null?0:page.steps.length();int files=page.changes==null?0:page.changes.optInt("files");
-            add(body,text("执行过程"+(count>0?" · "+count+" 项":"")+(files>0?" · "+files+" 个文件":""),NativeUi.TITLE,INK),-2);gap(body,6);
-            if(page.steps!=null)for(int i=0;i<page.steps.length();i++){JSONObject step=page.steps.optJSONObject(i);if(step==null)continue;add(body,text((step.optString("status").equals("completed")?"✓  ":"○  ")+step.optString("content",step.optString("step",step.optString("subject"))),NativeUi.LABEL,INK),-2);gap(body,4);}
-            if(files>0){Button changes=button("查看代码改动",false);add(body,changes,48);changes.setOnClickListener(v->showChanges(page));}
-        }
-        if(body.getChildCount()==0)add(body,emptyState("spark","当前没有待处理事项","执行中会在这里显示步骤、队列和审批"),-2);
-        ScrollView scroll=new NativeUi.InnerScroll(this);scroll.addView(body);LinearLayout wrapper=column();add(wrapper,scroll,Math.min(420,Math.max(96,64+body.getChildCount()*48)));Dialog dialog=sheet("会话状态","点击状态托盘可随时查看详情",wrapper);
-        if(body.getChildCount()>0)scroll.post(()->scroll.fullScroll(View.FOCUS_UP));
+        statusOverlayExpanded=!statusOverlayExpanded;
+        if(!statusOverlayExpanded){if(statusOverlay!=null)statusOverlay.setVisibility(View.GONE);if(statusTrayArrow!=null)statusTrayArrow.setImageDrawable(new NativeUi.Symbol("right",MUTED,dp(NativeUi.GLYPH_INLINE)));return;}
+        renderStatusOverlay();
     }
+
+    private void renderStatusOverlay(){
+        if(sessionId==null||stage==null||statusTray==null)return;
+        if(statusOverlay==null){statusOverlay=new FrameLayout(this);statusOverlay.setBackground(ui.surface(NativeUi.WHITE,NativeUi.CORNER_SHEET,true));statusOverlay.setElevation(dp(NativeUi.LIFT_DIALOG));stage.addView(statusOverlay,new FrameLayout.LayoutParams(-1,-1,Gravity.BOTTOM));}
+        statusOverlay.removeAllViews();statusOverlay.setVisibility(View.VISIBLE);
+        LinearLayout panel=column();panel.setPadding(dp(16),dp(8),dp(16),dp(12));
+        LinearLayout header=row();TextView heading=text("会话状态",NativeUi.TITLE,INK);medium(heading);header.addView(heading,new LinearLayout.LayoutParams(0,-2,1));Button close=ui.iconButton("close","关闭会话状态");header.addView(close,new LinearLayout.LayoutParams(dp(44),dp(44)));close.setOnClickListener(v->showStatusSheet());add(panel,header,48);rule(panel);
+        ChatCache cache=chatCaches.get(sessionKey);SessionPage page=cache==null?null:cache.page;LinearLayout body=column();
+        if(pending!=null){add(body,text("上次操作待核对",NativeUi.TITLE,INK),-2);add(body,text(sending?"正在提交到电脑…":"电脑端尚未返回这次操作的结果。",NativeUi.CAPTION,MUTED),-2);LinearLayout actions=row();Button requery=button("重查结果",false);compact(requery);requery.setOnClickListener(v->sendPending());actions.addView(requery,new LinearLayout.LayoutParams(0,dp(48),1));Button withdraw=button("撤回并编辑",false);compact(withdraw);withdraw.setOnClickListener(v->withdrawPending());actions.addView(withdraw,new LinearLayout.LayoutParams(0,dp(48),1));add(body,actions,48);gap(body,8);}
+        if(page!=null&&page.permissions!=null&&!page.permissions.isEmpty()){add(body,text("需要你的确认 · "+page.permissions.size(),NativeUi.TITLE,INK),-2);gap(body,4);for(SessionPage.Permission permission:page.permissions){LinearLayout card=column();inset(card,12,8);card.setBackground(ui.surface(NativeUi.TINT,NativeUi.CORNER_ROW,true));add(card,text(permission.needsInput?"有问题需要你回答":"需要确认 · "+permission.tool,NativeUi.CAPTION,INK),-2);if(permission.needsInput){Button answer=button("回答问题",true);add(card,answer,48);answer.setOnClickListener(v->showQuestion(permission));}else{LinearLayout decisions=row();for(String decision:new String[]{"accept","decline"}){Button b=button(decision.equals("accept")?"本次允许":"拒绝",decision.equals("accept"));b.setEnabled(!sending&&pending==null);b.setOnClickListener(v->{try{submit("respond",new JSONObject().put("requestId",permission.id).put("decision",decision));}catch(Exception e){showError(e);}});decisions.addView(b,new LinearLayout.LayoutParams(0,dp(48),1));}add(card,decisions,48);}add(body,card,-2);gap(body,6);}}
+        JSONArray queue=queuedMessages==null?new JSONArray():queuedMessages;if(queue.length()>0){add(body,text("排队消息 · "+queue.length(),NativeUi.TITLE,INK),-2);for(int i=0;i<queue.length();i++){JSONObject item=queue.optJSONObject(i);if(item==null)continue;JSONObject message=item.optJSONObject("body");String id=item.optString("id"),state=item.optString("state");LinearLayout line=row();line.addView(ui.icon(state.equals("unknown")?"info":"right",MUTED,NativeUi.GLYPH_INLINE),new LinearLayout.LayoutParams(dp(20),dp(20)));TextView label=text((message==null?"图片消息":message.optString("text","图片消息"))+(state.equals("unknown")?" · 结果待核对":""),NativeUi.LABEL,INK);label.setMaxLines(2);label.setEllipsize(TextUtils.TruncateAt.END);line.addView(label,new LinearLayout.LayoutParams(0,-2,1));add(body,line,-2);LinearLayout actions=row();for(String operation:new String[]{"recall","remove","sendnow"}){Button action=button(operation.equals("recall")?"撤回编辑":operation.equals("remove")?"删除":"立即发送",false);compact(action);action.setEnabled(!sending&&pending==null&&(state.equals("waiting")||state.equals("rejected")||state.equals("unknown")&&operation.equals("remove")));action.setOnClickListener(v->{try{JSONObject request=new JSONObject().put("operation",operation).put("queueId",id);if(state.equals("unknown")){alert().setTitle("已在电脑核对这条消息？").setPositiveButton("已核对，移除",(d,w)->{try{request.put("confirmed",true);submit("queue",request);}catch(Exception e){showError(e);}}).setNegativeButton("取消",null).show();}else submit("queue",request);}catch(Exception e){showError(e);}});actions.addView(action,new LinearLayout.LayoutParams(0,dp(44),1));}add(body,actions,44);gap(body,6);}}
+        if(page!=null&&(page.steps!=null&&page.steps.length()>0||page.changes!=null&&page.changes.optInt("files")>0)){int count=page.steps==null?0:page.steps.length();int files=page.changes==null?0:page.changes.optInt("files");add(body,text("执行过程"+(count>0?" · "+count+" 项":"")+(files>0?" · "+files+" 个文件":""),NativeUi.TITLE,INK),-2);if(page.steps!=null)for(int i=0;i<page.steps.length();i++){JSONObject step=page.steps.optJSONObject(i);if(step==null)continue;String state=step.optString("status");LinearLayout line=row();line.addView(ui.icon(state.equals("completed")?"check":state.equals("in_progress")?"spark":"right",state.equals("completed")?GREEN:MUTED,NativeUi.GLYPH_INLINE),new LinearLayout.LayoutParams(dp(22),dp(22)));TextView label=text(step.optString("content",step.optString("step",step.optString("subject"))),NativeUi.LABEL,INK);label.setMaxLines(3);label.setEllipsize(TextUtils.TruncateAt.END);line.addView(label,new LinearLayout.LayoutParams(0,-2,1));add(body,line,-2);gap(body,4);}if(files>0){Button changes=button("查看代码改动",false);compact(changes);add(body,changes,44);changes.setOnClickListener(v->showChanges(page));}}
+        if(body.getChildCount()==0)add(body,emptyState("spark","当前没有待处理事项","执行中会在这里显示步骤、队列和审批"),-2);
+        ScrollView scroll=new NativeUi.InnerScroll(this);scroll.addView(body);add(panel,scroll,0);LinearLayout.LayoutParams scrollLp=(LinearLayout.LayoutParams)scroll.getLayoutParams();scrollLp.weight=1;scrollLp.height=0;scroll.setLayoutParams(scrollLp);statusOverlay.addView(panel,new FrameLayout.LayoutParams(-1,-1));
+        statusTrayArrow.setImageDrawable(new NativeUi.Symbol("down",MUTED,dp(NativeUi.GLYPH_INLINE)));statusOverlay.post(()->positionStatusOverlay());
+    }
+
+    private void positionStatusOverlay(){
+        if(statusOverlay==null||statusTray==null||stage==null)return;int[] trayPoint=new int[2],stagePoint=new int[2];statusTray.getLocationOnScreen(trayPoint);stage.getLocationOnScreen(stagePoint);FrameLayout.LayoutParams lp=(FrameLayout.LayoutParams)statusOverlay.getLayoutParams();lp.leftMargin=0;lp.rightMargin=0;lp.bottomMargin=Math.max(0,stage.getHeight()-(trayPoint[1]-stagePoint[1]));statusOverlay.setLayoutParams(lp);statusOverlay.bringToFront();}
     private void showContextUsage(){ChatCache c=chatCaches.get(sessionKey);alert().setTitle("上下文窗口").setMessage(ContextRing.description(c==null||c.page==null?null:c.page.contextUsage)).setPositiveButton("知道了",null).show();}
     private void toggleComposerCollapsed(){composerCollapsed=!composerCollapsed;applyComposerCollapsed();}
     /** Folds or unfolds the chip row and points the caret at what the next tap will do. */
@@ -1235,7 +1272,7 @@ public final class MainActivity extends Activity {
 
     private void renderQueue(){
         if(queuePanel==null)return;queuePanel.removeAllViews();if(queuedMessages.length()==0){queuePanel.setVisibility(View.GONE);return;}queuePanel.setVisibility(View.VISIBLE);
-        Button title=button((queueExpanded?"⌄ ":"› ")+"排队消息 · "+queuedMessages.length(),false);title.setTextSize(NativeUi.CAPTION);title.setGravity(Gravity.LEFT|Gravity.CENTER_VERTICAL);title.setBackground(ui.touch(NativeUi.TINT,NativeUi.CORNER_ROW,false));title.setMinHeight(0);title.setMinimumHeight(0);add(queuePanel,title,36);title.setOnClickListener(v->{queueExpanded=!queueExpanded;renderQueue();});
+        LinearLayout title=row();title.setPadding(dp(8),0,dp(8),0);title.setBackground(ui.touch(NativeUi.TINT,NativeUi.CORNER_ROW,false));ImageView mark=ui.icon(queueExpanded?"down":"right",GREEN,NativeUi.GLYPH_INLINE);title.addView(mark,new LinearLayout.LayoutParams(dp(20),dp(20)));TextView titleText=text("排队消息 · "+queuedMessages.length(),NativeUi.CAPTION,INK);title.addView(titleText,new LinearLayout.LayoutParams(0,-2,1));add(queuePanel,title,36);title.setOnClickListener(v->{queueExpanded=!queueExpanded;renderQueue();});
         if(!queueExpanded)return;
         LinearLayout items=column();ScrollView scroll=new ScrollView(this);scroll.addView(items);add(queuePanel,scroll,Math.min(220,queuedMessages.length()*100));
         for(int i=0;i<queuedMessages.length();i++){JSONObject item=queuedMessages.optJSONObject(i);if(item==null)continue;JSONObject message=item.optJSONObject("body");String state=item.optString("state");TextView text=text((message==null?"":message.optString("text").isEmpty()?"图片消息":message.optString("text"))+(state.equals("unknown")?" · 结果待核对":state.equals("sending")?" · 提交中":state.equals("rejected")?" · 未发送":""),NativeUi.LABEL,INK);text.setMaxLines(2);text.setEllipsize(TextUtils.TruncateAt.END);text.setPadding(dp(8),dp(7),dp(8),0);add(items,text,-2);
@@ -1598,7 +1635,7 @@ public final class MainActivity extends Activity {
         ChatCache cache=chatCaches.get(sessionKey);if(cache==null)return;JSONArray entries=catalog.optJSONArray(kind.equals("plugins")?"skills":"models");if(entries==null)entries=new JSONArray();
         LinearLayout body=column(),items=column();ScrollView scroll=new NativeUi.MenuScroll(this,kind.equals("plugins")?272:168);scroll.addView(items);add(body,scroll,-2);
         if(kind.equals("plugins")){
-            JSONArray modes=catalog.optJSONArray("modes");if(modes!=null&&modes.length()>0){add(items,text("会话模式",NativeUi.CAPTION,MUTED),28);LinearLayout modeRow=row();add(items,modeRow,48);for(int n=0;n<modes.length();n++){JSONObject m=modes.optJSONObject(n);if(m==null)continue;String mode=m.optString("id");JSONObject goal=catalog.optJSONObject("goal");boolean active=mode.equals("goal")?goal!=null&&goal.optString("status").equals("active"):mode.equals(catalog.optString("currentMode"));Button choose=button((active?"✓ ":"")+m.optString("name"),false);choose.setTextSize(NativeUi.CAPTION);modeRow.addView(choose,new LinearLayout.LayoutParams(0,dp(48),1));choose.setOnClickListener(v->{if(mode.equals("goal")){closeOptions();goalOptions(catalog);return;}try{closeOptions();submit("settings",new JSONObject().put("collaborationMode",mode));}catch(Exception e){showError(e);}});}}
+            JSONArray modes=catalog.optJSONArray("modes");if(modes!=null&&modes.length()>0){add(items,text("会话模式",NativeUi.CAPTION,MUTED),28);LinearLayout modeRow=row();add(items,modeRow,48);for(int n=0;n<modes.length();n++){JSONObject m=modes.optJSONObject(n);if(m==null)continue;String mode=m.optString("id");JSONObject goal=catalog.optJSONObject("goal");boolean active=mode.equals("goal")?goal!=null&&goal.optString("status").equals("active"):mode.equals(catalog.optString("currentMode"));Button choose=button(m.optString("name"),false);choose.setTextSize(NativeUi.CAPTION);if(active)ui.leading(choose,"check",GREEN,NativeUi.GLYPH_INLINE);modeRow.addView(choose,new LinearLayout.LayoutParams(0,dp(48),1));choose.setOnClickListener(v->{if(mode.equals("goal")){closeOptions();goalOptions(catalog);return;}try{closeOptions();submit("settings",new JSONObject().put("collaborationMode",mode));}catch(Exception e){showError(e);}});}}
             for(int n=0;n<entries.length();n++){JSONObject item=entries.optJSONObject(n);if(item==null)continue;JSONArray members=item.optJSONArray("memberIds");boolean wasSelected=false;for(int k=0;members!=null&&k<members.length();k++)wasSelected|=cache.plugins.remove(members.optString(k));if(wasSelected&&item.optBoolean("selectable",true))cache.plugins.add(item.optString("id"));if(!item.optBoolean("selectable",true))cache.plugins.remove(item.optString("id"));}savePlugins(cache);
             String error=catalog.optString("pluginError",catalog.optString("goalError"));if(!error.isEmpty())add(items,text(error,NativeUi.CAPTION,NativeUi.RED),-2);
             add(items,text("插件与技能",NativeUi.CAPTION,MUTED),28);
@@ -1674,7 +1711,7 @@ public final class MainActivity extends Activity {
         // tearing down the view whose click listener is still on the stack, then touching
         // it again, is what made tapping the bar crash the app.
         bar.setOnClickListener(v->{taskExpanded=!taskExpanded;taskRevision="";taskPanel.post(()->{if(!isDestroyed())renderTasks(page);});});
-        for(int i=0;i<count;i++){JSONObject step=page.steps.optJSONObject(i);if(step==null)continue;add(detail,text((step.optString("status").equals("completed")?"✓  ":step.optString("status").equals("in_progress")?"◌  ":"○  ")+step.optString("content",step.optString("step",step.optString("subject"))),13,INK),-2);gap(detail,8);}
+        for(int i=0;i<count;i++){JSONObject step=page.steps.optJSONObject(i);if(step==null)continue;String state=step.optString("status");LinearLayout line=row();line.addView(ui.icon(state.equals("completed")?"check":state.equals("in_progress")?"spark":"right",state.equals("completed")?GREEN:MUTED,NativeUi.GLYPH_INLINE),new LinearLayout.LayoutParams(dp(22),dp(22)));TextView label=text(step.optString("content",step.optString("step",step.optString("subject"))),NativeUi.LABEL,INK);label.setMaxLines(3);label.setEllipsize(TextUtils.TruncateAt.END);line.addView(label,new LinearLayout.LayoutParams(0,-2,1));add(detail,line,-2);gap(detail,8);}
         if(files>0){
             add(detail,text("文件改动",NativeUi.CAPTION,MUTED),28);
             for(String name:changed){TextView row=text(name,NativeUi.CAPTION,INK);single(row);row.setPadding(dp(2),0,0,0);ui.leading(row,"file",MUTED,NativeUi.GLYPH_INLINE);add(detail,row,32);}
@@ -1825,7 +1862,7 @@ public final class MainActivity extends Activity {
         final int generation=epoch;final String path="/api/native/"+backend+"/creation/"+receipt.getString("id");handler.postDelayed(()->{if(isDestroyed()||generation!=epoch||paused)return;fetch(path,null,generation,r->creationResult(receipt,r,key));},2000);
     }
     private String modeName(String mode){switch(mode){case "read-only":return "只读 · 修改时询问";case "workspace-write":return "项目内读写 · 越界时询问";case "full-access":return "完全访问 · 不再询问";case "plan":return "计划模式 · 只读分析";case "acceptEdits":return "允许编辑 · 其他操作询问";case "bypassPermissions":return "完全访问 · 跳过权限确认";case "default":return "标准权限 · 按需询问";default:return "沿用电脑配置";}}
-    private void chooseAccess(){if(sessionId==null||inlineOptions==null)return;if(sending||pending!=null){toast("请先等待当前操作确认");return;}if(expandedOption.equals("access")){closeOptions();return;}closeOptions();expandedOption="access";loadingOptions("正在读取审批选项…");fetch("/api/native/"+backend+"/"+sessionId+"/access",null,epoch,value->{if(!expandedOption.equals("access")||inlineOptions==null)return;inlineOptions.removeAllViews();ui.reveal(inlineOptions,true);LinearLayout entries=column();ScrollView scroll=new ScrollView(this);scroll.addView(entries);add(inlineOptions,scroll,168);JSONArray modes=value.getJSONArray("modes");for(int i=0;i<modes.length();i++){final String mode=modes.getString(i);Button choose=ui.menu((mode.equals(value.optString("mode"))?"✓ ":"")+modeName(mode),mode.equals(value.optString("mode")));add(entries,choose,48);choose.setOnClickListener(v->{if(mode.equals("full-access")||mode.equals("bypassPermissions")){entries.removeAllViews();add(entries,text("允许修改电脑文件与运行命令，且不再逐次询问。",NativeUi.CAPTION,INK),-2);Button confirm=button("确认完全访问",true);add(entries,confirm,48);confirm.setOnClickListener(w->applyAccess(mode));}else applyAccess(mode);});}positionOptions();});}
+    private void chooseAccess(){if(sessionId==null||inlineOptions==null)return;if(sending||pending!=null){toast("请先等待当前操作确认");return;}if(expandedOption.equals("access")){closeOptions();return;}closeOptions();expandedOption="access";loadingOptions("正在读取审批选项…");fetch("/api/native/"+backend+"/"+sessionId+"/access",null,epoch,value->{if(!expandedOption.equals("access")||inlineOptions==null)return;inlineOptions.removeAllViews();ui.reveal(inlineOptions,true);LinearLayout entries=column();ScrollView scroll=new ScrollView(this);scroll.addView(entries);add(inlineOptions,scroll,168);JSONArray modes=value.getJSONArray("modes");for(int i=0;i<modes.length();i++){final String mode=modes.getString(i);boolean selected=mode.equals(value.optString("mode"));Button choose=ui.menu(modeName(mode),selected);if(selected)ui.leading(choose,"check",GREEN,NativeUi.GLYPH_INLINE);add(entries,choose,48);choose.setOnClickListener(v->{if(mode.equals("full-access")||mode.equals("bypassPermissions")){entries.removeAllViews();add(entries,text("允许修改电脑文件与运行命令，且不再逐次询问。",NativeUi.CAPTION,INK),-2);Button confirm=button("确认完全访问",true);add(entries,confirm,48);confirm.setOnClickListener(w->applyAccess(mode));}else applyAccess(mode);});}positionOptions();});}
     private void applyAccess(String mode){try{closeOptions();submit("access",new JSONObject().put("mode",mode));}catch(Exception e){showError(e);}}
 
     private void pickImages(){ChatCache cache=chatCaches.get(sessionKey);if(uploading||cache==null)return;if(cache.images.size()>=4){toast("每条消息最多 4 张图片");return;}pickerKey=sessionKey;Intent picker=new Intent(Intent.ACTION_OPEN_DOCUMENT);picker.setType("image/*");picker.addCategory(Intent.CATEGORY_OPENABLE);picker.putExtra(Intent.EXTRA_ALLOW_MULTIPLE,true);startActivityForResult(picker,701);}
@@ -1881,8 +1918,8 @@ public final class MainActivity extends Activity {
     private void startNotifications(){if(token.isEmpty())return;MonitorConnection.start(this);}
     private void handleNotification(Intent intent){if(intent==null||token.isEmpty())return;String id=intent.getStringExtra("sessionId"),kind=intent.getStringExtra("backend");if(id!=null&&( "codex".equals(kind)||"claude".equals(kind)||"deepseek".equals(kind))){backend=kind;openSession(id,intent.getStringExtra("title"));intent.removeExtra("sessionId");}}
     @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);handleNotification(intent);}
-    @Override public void onBackPressed(){if(gitPage!=null){closeGit();return;}if(!expandedOption.isEmpty()){closeOptions();return;}if(sessionId!=null){showTab(backend);return;}if(backend.equals("settings")){showTab(settingsReturn);return;}if(!token.isEmpty()&&!backend.equals(firstTab())){showTab(firstTab());return;}if(System.currentTimeMillis()-lastBack<1500){super.onBackPressed();return;}lastBack=System.currentTimeMillis();toast("再按一次返回退出");}
-    @Override public void onPause(){super.onPause();paused=true;pollTicket++;pollEpoch=-1;eventThread=null;for(HttpURLConnection active:liveConnections.values())active.disconnect();if(composer!=null){composer.clearFocus();root.requestFocus();((InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(composer.getWindowToken(),0);}if(nextPoll!=null)handler.removeCallbacks(nextPoll);}
+    @Override public void onBackPressed(){if(gitPage!=null){closeGit();return;}if(!expandedOption.isEmpty()){closeOptions();return;}if(statusOverlayExpanded){showStatusSheet();return;}if(sessionId!=null){showTab(backend);return;}if(backend.equals("settings")){showTab(settingsReturn);return;}if(!token.isEmpty()&&!backend.equals(firstTab())){showTab(firstTab());return;}if(System.currentTimeMillis()-lastBack<1500){super.onBackPressed();return;}lastBack=System.currentTimeMillis();toast("再按一次返回退出");}
+    @Override public void onPause(){super.onPause();paused=true;pollTicket++;pollEpoch=-1;eventThread=null;listEventThread=null;for(HttpURLConnection active:liveConnections.values())active.disconnect();if(composer!=null){composer.clearFocus();root.requestFocus();((InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(composer.getWindowToken(),0);}if(nextPoll!=null)handler.removeCallbacks(nextPoll);}
     @Override public void onResume(){super.onResume();boolean was=paused;paused=false;if(was){root.requestFocus();getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE|android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN);}if(was)MonitorConnection.start(this);
         // Returning from the overlay-permission screen is the exact moment the grant
         // becomes true. Nothing else looked at it again, so the user had to toggle the
@@ -1891,7 +1928,7 @@ public final class MainActivity extends Activity {
         // user just came back to, which is the one thing the foreground gate exists to
         // prevent, and it made the overlay reappear on every resume.
         if(was&&getSharedPreferences("ui",0).getBoolean("overlay",false)&&android.provider.Settings.canDrawOverlays(this))StatusOverlay.ensureRunning(this);
-        if(was&&sessionId!=null){pollEpoch=-1;poll(epoch,sessionId);}else if(was&&displayedListKey!=null)loadSessions(displayedListKey,false);}
+        if(was&&sessionId!=null){pollEpoch=-1;poll(epoch,sessionId);}else if(was&&displayedListKey!=null)startListEventStream(epoch,displayedListKey);}
     @Override public void onDestroy(){super.onDestroy();handler.removeCallbacksAndMessages(null);workers.shutdownNow();liveWorkers.shutdownNow();historyWorkers.shutdownNow();
         // The directory browser holds the Activity and a dialog window; leaving it
         // open across a rotation or a finish leaked both until the process died.

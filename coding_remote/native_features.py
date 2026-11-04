@@ -33,6 +33,7 @@ class NativeFeatures:
         self.status_cache = (0, {})
         self.context_cache = {}
         self.detail_cache = {}
+        self.list_cache = {}
         self.message_revisions = {}
         from .git_project import GitProjects
         self.git_projects = GitProjects(directory)
@@ -427,6 +428,33 @@ class NativeFeatures:
             try: value['messageRevision'] = self.codex_message_revision(sid)
             except (AttributeError, OSError, KeyError, TypeError, ValueError): value['messageRevision'] = ''
         return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()
+
+    def list_snapshot(self, backend, force=False):
+        """Return a short-lived list snapshot for the persistent list event stream.
+
+        Listing Codex working threads and asking Claude Desktop for both surfaces
+        are much more expensive than hashing a session row. A half-second shared
+        cache keeps one phone connection live without multiplying those bridge
+        calls when the normal list request and the event stream overlap.
+        """
+        now = time.monotonic()
+        cached = self.list_cache.get(backend)
+        if cached and not force and now - cached[0] < .5:
+            return cached[1]
+        value = self.server.dispatch(backend, None, None, {})
+        sessions = value.get('sessions') if isinstance(value, dict) else []
+        fingerprint = {
+            'connected': value.get('connected') if isinstance(value, dict) else False,
+            'notice': value.get('notice') if isinstance(value, dict) else '',
+            'errors': value.get('errors') if isinstance(value, dict) else [],
+            'sessions': sessions or [],
+        }
+        token = hashlib.sha256(json.dumps(fingerprint, ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()
+        result = {**value, 'token': token} if isinstance(value, dict) else {'sessions': [], 'token': token}
+        self.list_cache[backend] = (now, result)
+        if len(self.list_cache) > 8:
+            self.list_cache.pop(next(iter(self.list_cache)))
+        return result
 
     def files(self, backend, sid, query):
         row = self.session_row(backend, sid)

@@ -20,6 +20,19 @@ class SessionStore:
         conn.row_factory = sqlite3.Row
         return conn
 
+    @staticmethod
+    def _is_desktop_thread(row):
+        """Accept desktop Codex and ChatGPT threads, while excluding subagents."""
+        source = str(row.get("source") or "")
+        originator = row.get("originator")
+        allowed_originators = {
+            "Codex Desktop", "codex_work_desktop",
+            "ChatGPT Desktop", "ChatGPT", "chatgpt",
+        }
+        allowed_sources = {"vscode", "mcp", "chatgpt", "chatgpt_desktop"}
+        origin_ok = "originator" not in row or originator in allowed_originators or (originator is None and source in allowed_sources)
+        return origin_ok and row.get("thread_source") != "subagent" and '"subagent"' not in source
+
     def list(self, query="", limit=100, offset=0, archived=False, working=False):
         with closing(self._connect()) as conn:
             columns = {r[1] for r in conn.execute("PRAGMA table_info(threads)")}
@@ -30,7 +43,12 @@ class SessionStore:
             params = [int(archived)]
             if "originator" in columns:
                 # Older desktop imports have no originator but retain their app source.
-                where.append("(originator IN ('Codex Desktop', 'codex_work_desktop') OR (originator IS NULL AND source = 'vscode'))")
+                if "source" in columns:
+                    where.append("(originator IN ('Codex Desktop', 'codex_work_desktop', 'ChatGPT Desktop', 'ChatGPT', 'chatgpt') OR (originator IS NULL AND source IN ('vscode', 'mcp', 'chatgpt', 'chatgpt_desktop')))")
+                else:
+                    where.append("originator IN ('Codex Desktop', 'codex_work_desktop', 'ChatGPT Desktop', 'ChatGPT', 'chatgpt')")
+            elif "source" in columns:
+                where.append("source IN ('vscode', 'mcp', 'chatgpt', 'chatgpt_desktop')")
             if "thread_source" in columns:
                 where.append("COALESCE(thread_source, '') != 'subagent'")
             if "source" in columns:
@@ -93,8 +111,7 @@ class SessionStore:
             result = dict(row)
             # New desktop databases omit originator entirely. Match list()'s
             # schema-aware filter so every listed parent can also be opened.
-            desktop = "originator" not in result or result.get("originator") in ("Codex Desktop", "codex_work_desktop") or (result.get("originator") is None and result.get("source") == "vscode")
-            if not desktop or result.get("thread_source") == "subagent" or '"subagent"' in (result.get("source") or ""):
+            if not self._is_desktop_thread(result):
                 raise KeyError("不是桌面 App 会话")
             return result
 

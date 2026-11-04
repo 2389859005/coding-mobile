@@ -1,6 +1,6 @@
 @echo off
 rem ====================================================================
-rem  CodingRemoteAssistant - double-clickable packaging launcher (2.2.1)
+rem  CodingRemoteAssistant - double-clickable packaging launcher (2.2.2)
 rem  Self-contained: calls ONLY the project's own build scripts under
 rem  packaging\ (build_native_exe.py / build_native_apk.py). No helper
 rem  wrapper file is required. Keep this .cmd anywhere inside the project.
@@ -45,7 +45,7 @@ if not "%TARGET%"=="" goto resolve
 
 :menu
 echo ==================================================
-echo   CodingRemoteAssistant - packaging 2.2.1
+echo   CodingRemoteAssistant - packaging 2.2.2
 echo ==================================================
 echo   [1] both      Windows EXE + Android APK  (default)
 echo   [2] windows   Windows EXE only
@@ -106,18 +106,18 @@ exit /b 1
 
 rem --- Windows EXE: discover+cache verified base, then repack -----------
 :buildwin
-echo === building windows 2.2.1 ===
+echo === building windows 2.2.2 ===
 "%PY%" -c "import os,sys,hashlib,shutil;from pathlib import Path;root=Path(os.environ['CRA_ROOT']);sys.path.insert(0,str(root/'packaging'));import build_common as bc,build_native_exe as bx;cache=root/'.local'/'native-base-windows-1.6.23.exe';cands=[cache,root/'CodexMobileAssistant-Windows-1.6.23.exe',root.parent/'CodexMobileAssistant-Windows-1.6.23.exe',Path('D:/download/CodexMobileAssistant-Windows-1.6.23.exe')];base=next((c for c in cands if c.is_file() and hashlib.sha256(c.read_bytes()).hexdigest()==bc.EXPECTED_EXE),None);assert base is not None,'No verified Windows base CodexMobileAssistant-Windows-1.6.23.exe found under .local or project root';cache.parent.mkdir(parents=True,exist_ok=True);(shutil.copyfile(base,cache) if base.resolve()!=cache.resolve() else 0);print('[windows] base:',cache);bx.build(str(cache))"
 exit /b %errorlevel%
 
 rem --- Android APK: fixed-hash base fallback (no original needed) --------
 :buildapk
-echo === building android 2.2.1 ===
+echo === building android 2.2.2 ===
 "%PY%" -c "import os,sys;from pathlib import Path;root=Path(os.environ['CRA_ROOT']);sys.path.insert(0,str(root/'packaging'));import build_native_apk as ba;print('[android] base: .local/native-base-2.0.0.apk (fixed-hash fallback)');ba.build(None)"
 exit /b %errorlevel%
 
-rem --- refresh dist\SHA256SUMS.txt for whatever 2.2.1 artifacts exist ----
+rem --- refresh dist\SHA256SUMS.txt for whatever 2.2.2 artifacts exist ----
 :sums
 echo === refresh dist\SHA256SUMS.txt ===
-"%PY%" -c "import os,hashlib;from pathlib import Path;root=Path(os.environ['CRA_ROOT']);dist=root/'dist';names=['CodingRemoteAssistant-Windows-2.2.1.exe','CodingRemoteAssistant-Android-2.2.1.apk'];ent={n:hashlib.sha256((dist/n).read_bytes()).hexdigest() for n in names if (dist/n).is_file()};(dist/'SHA256SUMS.txt').write_text(''.join(ent[n]+'  '+n+chr(10) for n in sorted(ent)));[print(ent[n],'',n) for n in sorted(ent)]"
+"%PY%" -c "import os,hashlib;from pathlib import Path;root=Path(os.environ['CRA_ROOT']);dist=root/'dist';names=['CodingRemoteAssistant-Windows-2.2.2.exe','CodingRemoteAssistant-Android-2.2.2.apk'];ent={n:hashlib.sha256((dist/n).read_bytes()).hexdigest() for n in names if (dist/n).is_file()};(dist/'SHA256SUMS.txt').write_text(''.join(ent[n]+'  '+n+chr(10) for n in sorted(ent)));[print(ent[n],'',n) for n in sorted(ent)]"
 exit /b 0

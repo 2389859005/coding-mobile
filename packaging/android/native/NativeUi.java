@@ -594,6 +594,7 @@ final class NativeUi {
                 case "monitor":box(c,3,4,21,17,2);line(c,12,17,12,21);line(c,8,21,16,21);break;
                 case "phone":box(c,6,2,18,22,3);line(c,10,18,14,18);break;
                 case "check":line(c,5,12,10,17,19,7);break;
+                case "dot":p.setStyle(Paint.Style.FILL);c.drawCircle(12,12,4,p);break;
                 case "refresh":c.drawArc(4,4,20,20,40,295,false,p);line(c,20,3,20,9,14,9);break;
                 case "chat":box(c,3,4,21,18,4);line(c,7,18,6,22,12,18);line(c,8,9,16,9);line(c,8,13,13,13);break;
                 case "code":line(c,8,7,3,12,8,17);line(c,16,7,21,12,16,17);line(c,14,4,10,20);break;

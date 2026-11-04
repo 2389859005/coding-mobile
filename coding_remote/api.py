@@ -304,6 +304,44 @@ class Handler(BaseHTTPRequestHandler):
             # the socket by cancelling the response.
             self.close_connection=True
 
+    def list_event_stream(self, backend, query):
+        """Keep the session catalog live while a backend tab is visible.
+
+        The mobile client used to refresh this catalog on a timer.  A shared,
+        short-lived snapshot keeps the stream cheap while still delivering a
+        changed conversation list as soon as the desktop database changes.
+        """
+        known=query.get('known',[''])[0]
+        self.send_response(200)
+        self.send_header('Content-Type','text/event-stream; charset=utf-8')
+        self.send_header('Cache-Control','no-cache, no-store, must-revalidate')
+        self.send_header('Connection','keep-alive')
+        self.send_header('X-Accel-Buffering','no')
+        self.end_headers()
+        self.close_connection=False
+        try:
+            snapshot=self.server.features.list_snapshot(backend)
+            current=snapshot.get('token','')
+            if not known or known!=current:self.event(snapshot)
+            else:self.event(comment='connected')
+            heartbeat=time.monotonic()+12
+            while True:
+                time.sleep(.35)
+                snapshot=self.server.features.list_snapshot(backend)
+                current=snapshot.get('token','')
+                if current!=known:
+                    known=current
+                    self.event(snapshot)
+                    heartbeat=time.monotonic()+12
+                elif time.monotonic()>=heartbeat:
+                    self.event(comment='keep-alive');heartbeat=time.monotonic()+12
+        except (BrokenPipeError,ConnectionResetError,TimeoutError,OSError):
+            return
+        except Exception:
+            logging.exception('Native list event stream stopped')
+        finally:
+            self.close_connection=True
+
 
     def do_GET(self): self.handle_api(False)
     def do_POST(self): self.handle_api(True)
@@ -354,6 +392,8 @@ class Handler(BaseHTTPRequestHandler):
             # history cursor, the `known` token and the queue listing.
             query=parse_qs(urlsplit(self.path).query)
             features=self.server.features
+            if sid=='events' and not write and not action:
+                return self.list_event_stream(backend,query)
             if sid and not write and action=='events':
                 return self.event_stream(backend,sid,query)
             # These routes answer without going through dispatch(), so they have to

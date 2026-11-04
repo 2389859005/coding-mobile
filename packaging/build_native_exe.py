@@ -93,7 +93,7 @@ def build(source=None):
         encoded=name.encode()+b'\0';size=(ENTRY.size+len(encoded)+15)//16*16
         data.extend(ENTRY.pack(size,pos,packed,raw,compressed,kind));data.extend(encoded.ljust(size-ENTRY.size,b'\0'))
     size=len(data)-offset;data.extend(COOKIE.pack(MAGIC,len(data)+COOKIE.size,offset,size,version,dll))
-    target=ROOT/'dist/CodingRemoteAssistant-Windows-2.2.1.exe';target.parent.mkdir(exist_ok=True)
+    target=ROOT/'dist/CodingRemoteAssistant-Windows-2.2.2.exe';target.parent.mkdir(exist_ok=True)
     content=prefix+data
     _,after,_,_=unpack(content);assert len(after)==len(rows)
     temporary=target.with_suffix('.tmp');temporary.write_bytes(content);temporary.replace(target)
