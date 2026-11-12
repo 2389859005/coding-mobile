@@ -9,10 +9,10 @@ import java.security.MessageDigest;
 final class SessionPage {
     static final int PAGE_SIZE=60, CHUNK_SIZE=6000;
     static final class Row {
-        final String id,role,text,kind,title,language,turnId;
+        final String id,role,text,kind,title,language,turnId,sourceId;
         final boolean continuation;
         Row(String i,String r,String t,boolean c){this(i,r,t,c,new JSONObject());}
-        Row(String i,String r,String t,boolean c,JSONObject m){id=i;role=r;text=t;continuation=c;kind=m.optString("kind");title=m.optString("title");language=m.optString("language");turnId=m.optString("turnId");}
+        Row(String i,String r,String t,boolean c,JSONObject m){id=i;role=r;text=t;continuation=c;kind=m.optString("kind");title=m.optString("title");language=m.optString("language");turnId=m.optString("turnId");sourceId=m.optString("sourceId",m.optString("id",i));}
         boolean activity(){
             if(kind.equals("code")||kind.equals("step")||kind.equals("executionGroup")||kind.equals("image"))return true;
             if(!role.equals("user")&&!role.equals("assistant"))return true;
@@ -44,6 +44,29 @@ final class SessionPage {
     boolean running,hasEarlier,hasLater,connected;
     int before,total;
 
+    /** Repeat table headers across bounded transcript rows so large answers stay tables. */
+    static ArrayList<String> tableChunks(String body){
+        ArrayList<String> chunks=new ArrayList<>();StringBuilder current=new StringBuilder();String[] lines=body.split("\n",-1);
+        for(int i=0;i<lines.length;i++){
+            if(i+1<lines.length&&MarkdownTable.starts(lines[i],lines[i+1])){
+                String header=lines[i]+"\n"+lines[++i]+"\n";
+                if(current.length()>0){chunks.add(current.toString());current.setLength(0);}
+                current.append(header);
+                while(i+1<lines.length&&!lines[i+1].trim().isEmpty()&&lines[i+1].contains("|")&&!lines[i+1].trim().startsWith("```")){
+                    String line=lines[++i]+"\n";
+                    if(current.length()+line.length()>CHUNK_SIZE&&current.length()>header.length()){chunks.add(current.toString());current.setLength(0);current.append(header);}
+                    current.append(line);
+                }
+                chunks.add(current.toString());current.setLength(0);
+            }else{
+                String line=lines[i]+"\n";
+                if(current.length()+line.length()>CHUNK_SIZE&&current.length()>0){chunks.add(current.toString());current.setLength(0);}
+                current.append(line);
+            }
+        }
+        if(current.length()>0)chunks.add(current.toString());return chunks;
+    }
+
     static SessionPage prepare(JSONObject value)throws Exception {
         SessionPage page=new SessionPage();page.source=value;JSONObject s=value.getJSONObject("session");page.turns=s.optInt("turnCount");page.token=value.optString("token","");page.completed=s.optString("completedTurnId",s.optString("turnId",""));page.title=s.optString("title");page.effort=s.optString("effort","");page.changes=value.optJSONObject("changes");page.steps=value.optJSONArray("steps");
         String state=s.optString("status","idle");page.running=state.equals("active")||state.equals("inProgress")||state.equals("running");
@@ -58,6 +81,11 @@ final class SessionPage {
         if(messages!=null)for(int i=messages.length()-1;i>=0&&page.rows.size()<PAGE_SIZE;i--){
             JSONObject m=messages.getJSONObject(i);String body=m.optString("text","");int end=body.length();
             ArrayList<Row> parts=new ArrayList<>();
+            if(!m.optString("kind").equals("code")&&!m.optString("kind").equals("snippet")&&!body.contains("```")&&body.length()>CHUNK_SIZE&&body.matches("(?s).*\\n\\s*\\|?\\s*:?-{3,}.*")){
+                ArrayList<String> chunks=tableChunks(body);
+                for(int n=chunks.size()-1;n>=0&&parts.size()+page.rows.size()<PAGE_SIZE;n--)parts.add(0,new Row(m.optString("id",String.valueOf(i))+":table:"+n,m.optString("role","activity"),chunks.get(n),n>0||m.optBoolean("continuation"),m));
+                page.rows.addAll(0,parts);continue;
+            }
             while(end>0&&parts.size()+page.rows.size()<PAGE_SIZE){
                 int start=Math.max(0,end-CHUNK_SIZE);
                 if(start>0&&Character.isLowSurrogate(body.charAt(start))&&Character.isHighSurrogate(body.charAt(start-1)))start++;
@@ -73,6 +101,7 @@ final class SessionPage {
         if(requests!=null)for(int i=0;i<Math.min(10,requests.length());i++)page.permissions.add(new Permission(requests.getJSONObject(i)));
         MessageDigest digest=MessageDigest.getInstance("SHA-256");
         digest.update((byte)(page.running?1:0));
+        digest.update((s.toString()+String.valueOf(page.steps)+String.valueOf(page.changes)).getBytes("UTF-8"));
         for(Row row:page.rows){for(String part:new String[]{row.id,row.role,row.text,row.kind,row.title,row.language,String.valueOf(row.continuation)}){digest.update(part.getBytes("UTF-8"));digest.update((byte)0);}}
         StringBuilder hash=new StringBuilder();for(byte b:digest.digest())hash.append(String.format("%02x",b&255));page.revision=hash.toString();
         return page;

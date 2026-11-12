@@ -3,7 +3,11 @@ const fs=require('node:fs');
 const {minify}=require('../.local/minifier/node_modules/terser');
 (async()=>{
   const source=fs.readFileSync('claude_bridge/desktop-file.js','utf8');
-  const result=await minify(source,{compress:true,mangle:true,format:{ascii_only:false,comments:false}});
+  const result=await minify(source,{
+    compress:{passes:3,global_defs:{__FILE_ONLY__:true}},mangle:true,
+    format:{ascii_only:false,comments:false}
+  });
   if(!result.code||result.code.includes('\n'))throw Error('Console script must be one line');
-  fs.writeFileSync('claude_bridge/desktop-console.js','/* coding remote script */'+result.code,'utf8');
+  fs.writeFileSync('claude_bridge/desktop-console.js',result.code,'utf8');
+  console.log(`Console connector: ${result.code.length} characters`);
 })().catch(error=>{console.error(error);process.exitCode=1;});

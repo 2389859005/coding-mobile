@@ -1,28 +1,28 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const {webcrypto, createHmac} = require('node:crypto');
-const config = {cwd:'D:/fixture', request:'request.json', response:'response.json', token:'test', generation:'run', reconnect:true};
-const pack = value => {
-  const payload = JSON.stringify({generation:'run', ...value});
-  return JSON.stringify({payload,signature:createHmac('sha256','test').update(payload).digest('hex')});
-};
+const config = {cwd:'D:/fixture', request:'request.json', response:'response.json', reconnect:true};
+const pack = value => JSON.stringify({generation:'run', ...value});
 let request = pack({seq:0,type:'idle'}), response, calls = [];
-let failWrites=0,catalogHung=false;
+let failWrites=0,catalogHung=false;const eventListeners=new Set();
 const api = {
+  onEvent(callback){eventListeners.add(callback);return ()=>eventListeners.delete(callback);},
+  onToolPermissionRequest(callback){eventListeners.add(callback);return ()=>eventListeners.delete(callback);},
   async readFileAtCwd() { return {contents:request}; },
-  async writeSessionFile(sid,path,text) { if(failWrites>0){failWrites--;throw Error('temporary write failure');}response=JSON.parse(JSON.parse(text).payload); return {hash:'ok'}; },
+  async writeSessionFile(sid,path,text) { if(failWrites>0){failWrites--;throw Error('temporary write failure');}response=JSON.parse(text); return {hash:'ok'}; },
   async getAll() { if(catalogHung)return new Promise(()=>{});return [{sessionId:'local_test',cwd:'D:/fixture',title:'Claude Mobile Adapter Test',oauthToken:'SECRET'}]; },
   async getSupportedCommands(options) {assert.ok(options && typeof options==='object' && !Array.isArray(options));return options;},
   async getSession(id) { return {sessionId:id, oauthToken:'SECRET'}; },
   async sendMessage(...args) { calls.push(args); },
+  async setModel(id,model){return {id,model};},
+  async interrupt(id){return {id,stopped:true};},
   async getTranscript() {return [
     {type:'user',isSynthetic:true,uuid:'retry',message:{role:'user',content:[{type:'text',text:'internal retry'}]}},
     {type:'assistant',uuid:'answer',message:{role:'assistant',content:[{type:'thinking',thinking:'PRIVATE_THINKING'},{type:'text',text:'visible'}]}},
   ];},
 };
 const window = {'claude.web':{LocalSessions:api,LocalAgentModeSessions:api}};
-const context = {window,TextEncoder,Uint8Array,crypto:webcrypto,console,
+const context = {window,console,
   clearTimeout,setTimeout:(fn,ms)=>setTimeout(fn,ms>=9000?100:Math.min(ms,10))};
 const source=fs.readFileSync(process.env.CONNECTOR_TEMPLATE || 'claude_bridge/desktop-file.js','utf8').replace('__BRIDGE_CONFIG__',JSON.stringify(config));
 const waitFor = async predicate => {
@@ -37,10 +37,22 @@ const waitFor = async predicate => {
   assert.deepEqual(calls,[['local_test','hello']]);
   await new Promise(r=>setTimeout(r,100));
   assert.equal(calls.length,1,'same sequence must not execute again');
+  const revision=response.eventRevision;
+  assert.ok(eventListeners.size>0,'native event subscriptions installed');
+  for(const callback of eventListeners)callback({type:'assistant-message'});
+  await waitFor(()=>response.eventRevision>revision);
+  assert.equal(response.seq,1,'an event must not create a command');
+  assert.equal(calls.length,1,'an event must not repeat a write');
+  const beforeModel=response.eventRevision;
+  assert.deepEqual(await api.setModel('local_test','new-model'),{id:'local_test',model:'new-model'});
+  await waitFor(()=>response.eventRevision>beforeModel);
+  const beforeStop=response.eventRevision;
+  assert.equal((await api.interrupt('local_test')).stopped,true);
+  await waitFor(()=>response.eventRevision>beforeStop);
   request=pack({type:'request',seq:2,surface:'code',method:'sendMessage',args:['local_test','expired'],expires:0});
   await waitFor(()=>response.seq===2 && response.done);
   assert.ok(response.error); assert.equal(calls.length,1);
-  request=pack({type:'request',seq:3,surface:'code',method:'readFileAtCwd',args:[],expires:Date.now()/1000+10});
+  request=pack({type:'request',seq:3,surface:'code',method:'missingMethod',args:[],expires:Date.now()/1000+10});
   await waitFor(()=>response.seq===3 && response.done); assert.ok(response.error);
   request=pack({type:'request',seq:4,surface:'code',method:'getAll',args:[],expires:Date.now()/1000+10});
   await waitFor(()=>response.seq===4 && response.done);
@@ -73,7 +85,23 @@ const waitFor = async predicate => {
     const current=++seq;request=pack({generation:'next',type:'request',seq:current,surface,method:'getSupportedCommands',args,expires:Date.now()/1000+10});
     await waitFor(()=>response.seq===current && response.done);assert.equal(response.error,undefined);assert.equal(response.result.sessionId,args.length?'local_test':undefined);
   }
+  const emit=event=>{for(const callback of eventListeners)callback({type:'message',sessionId:'local_test',message:{type:'stream_event',event}});};
+  emit({type:'message_start',message:{id:'streamed-answer'}});
+  emit({type:'content_block_start',index:0,content_block:{type:'text',text:''}});
+  emit({type:'content_block_delta',index:0,delta:{type:'text_delta',text:'正在'}});
+  emit({type:'content_block_delta',index:0,delta:{type:'text_delta',text:'生成回复'}});
+  emit({type:'content_block_delta',index:1,delta:{type:'thinking_delta',thinking:'PRIVATE_THINKING'}});
+  async function snapshot(){const current=++seq;request=pack({generation:'next',type:'request',seq:current,surface:'code',method:'mobileSession',args:['local_test'],expires:Date.now()/1000+10});await waitFor(()=>response.seq===current && response.done);return response.result;}
+  let live=await snapshot();assert.equal(live.transcript.at(-1).message.content[0].text,'正在生成回复');
+  assert.ok(!JSON.stringify(live).includes('PRIVATE_THINKING'));
+  for(const callback of eventListeners)callback({type:'message',sessionId:'local_test',message:{type:'assistant',message:{id:'streamed-answer'}}});
+  live=await snapshot();assert.equal(live.transcript.length,2,'completed frame replaces provisional text');
+  emit({type:'content_block_delta',index:0,delta:{type:'text_delta',text:'连接恢复后的片段'}});
+  live=await snapshot();assert.equal(live.transcript.at(-1).message.content[0].text,'连接恢复后的片段');
+  for(const callback of eventListeners)callback({type:'message',sessionId:'local_test',message:{type:'assistant',message:{id:'new-answer'}}});
+  live=await snapshot();assert.equal(live.transcript.length,2,'unknown stream identity is cleared by the final assistant frame');
   window.__claudeMobileBridge.stop(); await running;
   assert.equal(response.connected,false);
-  console.log('Desktop file connector: handshake, original session dispatch, deduplication, expiry, allowlist, redaction, restart, replay rejection, stop passed.');
+  assert.equal(eventListeners.size,0,'native callbacks released on stop');
+  console.log('Desktop file connector: plain JSON, session dispatch, deduplication, expiry, errors, redaction, events, restart, replay rejection, stop passed.');
 })().catch(e=>{window.__claudeMobileBridge?.stop();console.error(e);process.exitCode=1;});

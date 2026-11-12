@@ -23,14 +23,11 @@ class SessionStore:
     @staticmethod
     def _is_desktop_thread(row):
         """Accept desktop Codex and ChatGPT threads, while excluding subagents."""
-        source = str(row.get("source") or "")
+        source = str(row.get("source") or "").lower()
         originator = row.get("originator")
-        allowed_originators = {
-            "Codex Desktop", "codex_work_desktop",
-            "ChatGPT Desktop", "ChatGPT", "chatgpt",
-        }
+        originator_text=str(originator or "").strip().lower()
         allowed_sources = {"vscode", "mcp", "chatgpt", "chatgpt_desktop"}
-        origin_ok = "originator" not in row or originator in allowed_originators or (originator is None and source in allowed_sources)
+        origin_ok = (not originator_text or "desktop" in originator_text or "chatgpt" in originator_text or source in allowed_sources) if "originator" in row else ("source" not in row or source in allowed_sources)
         return origin_ok and row.get("thread_source") != "subagent" and '"subagent"' not in source
 
     def list(self, query="", limit=100, offset=0, archived=False, working=False):
@@ -44,11 +41,11 @@ class SessionStore:
             if "originator" in columns:
                 # Older desktop imports have no originator but retain their app source.
                 if "source" in columns:
-                    where.append("(originator IN ('Codex Desktop', 'codex_work_desktop', 'ChatGPT Desktop', 'ChatGPT', 'chatgpt') OR (originator IS NULL AND source IN ('vscode', 'mcp', 'chatgpt', 'chatgpt_desktop')))")
+                    where.append("(TRIM(COALESCE(originator, '')) = '' OR LOWER(originator) LIKE '%desktop%' OR LOWER(originator) LIKE '%chatgpt%' OR LOWER(source) IN ('vscode', 'mcp', 'chatgpt', 'chatgpt_desktop'))")
                 else:
-                    where.append("originator IN ('Codex Desktop', 'codex_work_desktop', 'ChatGPT Desktop', 'ChatGPT', 'chatgpt')")
+                    where.append("(TRIM(COALESCE(originator, '')) = '' OR LOWER(originator) LIKE '%desktop%' OR LOWER(originator) LIKE '%chatgpt%')")
             elif "source" in columns:
-                where.append("source IN ('vscode', 'mcp', 'chatgpt', 'chatgpt_desktop')")
+                where.append("LOWER(source) IN ('vscode', 'mcp', 'chatgpt', 'chatgpt_desktop')")
             if "thread_source" in columns:
                 where.append("COALESCE(thread_source, '') != 'subagent'")
             if "source" in columns:

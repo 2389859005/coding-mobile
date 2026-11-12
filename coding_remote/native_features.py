@@ -9,10 +9,11 @@ import time
 import uuid
 from pathlib import Path
 from contextlib import closing
+from concurrent.futures import ThreadPoolExecutor, wait
 
 from claude_bridge.packaged import APIError
 from .context_usage import normalize
-from .native_content import permission_selection, permission_settings, referenced_paths
+from .native_content import permission_selection, permission_settings, referenced_paths, image_paths
 
 MAX_IMAGE = 3 * 1024 * 1024
 MAX_FILE = 12 * 1024 * 1024
@@ -34,6 +35,7 @@ class NativeFeatures:
         self.context_cache = {}
         self.detail_cache = {}
         self.list_cache = {}
+        self.read_versions = {}
         self.message_revisions = {}
         from .git_project import GitProjects
         self.git_projects = GitProjects(directory)
@@ -44,7 +46,12 @@ class NativeFeatures:
         else:row=self.server.deepseek.call('detail',sid)['session']
         cwd=row.get('cwd')
         if not cwd:raise ValueError('当前会话没有本地项目目录')
-        root=self.git_projects.root(cwd)
+        roots=list(dict.fromkeys(path for path in (cwd,row.get('projectCwd')) if path))
+        root=None;failure=None
+        for path in roots:
+            try:root=self.git_projects.root(path);break
+            except ValueError as error:failure=error
+        if root is None:raise failure or ValueError('当前会话没有可用的 Git 仓库')
         if body is not None:return self.git_projects.mutate(root,body)
         if query.get('path'):return self.git_projects.diff(root,query['path'][0],query.get('staged',['false'])[0]=='true')
         return self.git_projects.snapshot(root)
@@ -82,12 +89,16 @@ class NativeFeatures:
         # Opening a conversation and the poll right after it, or the overlay's own
         # poll, must not rebuild the same transcript twice.
         key = (backend, sid)
-        cached = self.detail_cache.get(key)
+        with self.status_lock:
+            version=self.read_versions.get(backend,0)
+            cached = self.detail_cache.get(key)
         now = time.monotonic()
         if cached and now-cached[0] < 2: return cached[1]
         value = self.server.dispatch(backend, sid, None, {})
-        self.detail_cache[key] = (now, value)
-        if len(self.detail_cache) > 40: self.detail_cache.pop(next(iter(self.detail_cache)))
+        with self.status_lock:
+            if self.read_versions.get(backend,0)==version:
+                self.detail_cache[key] = (now, value)
+                if len(self.detail_cache) > 40: self.detail_cache.pop(next(iter(self.detail_cache)))
         return value
 
     def catalog(self, backend, sid, section="all"):
@@ -380,6 +391,7 @@ class NativeFeatures:
         state from before it. reply_revisions is created lazily, so it is looked up
         defensively rather than assumed to exist.
         """
+        if hasattr(self.server,'live'):self.server.live.invalidate(backend=backend)
         cache = getattr(self, 'detail_cache', None)
         if cache is not None: cache.pop((backend, sid), None)
         context = getattr(self, 'context_cache', None)
@@ -416,6 +428,9 @@ class NativeFeatures:
         requests = row.get('requests') or []
         value = {
             'status': row.get('status'),
+            'model': row.get('model'),
+            'effort': row.get('effort'),
+            'permissionMode': row.get('permissionMode'),
             'updatedAt': row.get('updatedAt'),
             'turnId': row.get('turnId'),
             'completedTurnId': row.get('completedTurnId'),
@@ -425,8 +440,15 @@ class NativeFeatures:
             'queue': self.server.queue.listing(backend, sid),
         }
         if backend == 'codex':
+            try:value['settings']=self.codex_settings(sid)
+            except (AttributeError,KeyError,TypeError,ValueError):pass
             try: value['messageRevision'] = self.codex_message_revision(sid)
             except (AttributeError, OSError, KeyError, TypeError, ValueError): value['messageRevision'] = ''
+            try:
+                store=self.server.bridge.store
+                stat=store._rollout_path(store.get(sid)).stat()
+                value['transcriptRevision']=(stat.st_size,stat.st_mtime_ns)
+            except (AttributeError,OSError,KeyError,TypeError,ValueError):pass
         return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()
 
     def list_snapshot(self, backend, force=False):
@@ -438,8 +460,10 @@ class NativeFeatures:
         calls when the normal list request and the event stream overlap.
         """
         now = time.monotonic()
-        cached = self.list_cache.get(backend)
-        if cached and not force and now - cached[0] < .5:
+        with self.status_lock:
+            version=self.read_versions.get(backend,0)
+            cached = self.list_cache.get(backend)
+        if cached and not force and now - cached[0] < .25:
             return cached[1]
         value = self.server.dispatch(backend, None, None, {})
         sessions = value.get('sessions') if isinstance(value, dict) else []
@@ -451,9 +475,11 @@ class NativeFeatures:
         }
         token = hashlib.sha256(json.dumps(fingerprint, ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()
         result = {**value, 'token': token} if isinstance(value, dict) else {'sessions': [], 'token': token}
-        self.list_cache[backend] = (now, result)
-        if len(self.list_cache) > 8:
-            self.list_cache.pop(next(iter(self.list_cache)))
+        with self.status_lock:
+            if self.read_versions.get(backend,0)==version:
+                self.list_cache[backend] = (now, result)
+                if len(self.list_cache) > 8:
+                    self.list_cache.pop(next(iter(self.list_cache)))
         return result
 
     def files(self, backend, sid, query):
@@ -525,7 +551,38 @@ class NativeFeatures:
             except (OSError, ValueError): continue
         raise ValueError('只能预览当前会话项目内的文件')
 
-    def file(self, backend, sid, query):
+    def read_image_path(self, backend, sid, requested):
+        """Grant only the exact image named by a real desktop tool call in this chat.
+
+        Rendered Markdown and user-supplied kind/title fields are not permissions.
+        Verify against raw desktop records, including for files outside the cwd.
+        """
+        if not requested or requested.startswith('\\\\') or '\0' in requested:return None
+        candidate=Path(requested)
+        if candidate.suffix.lower() not in ('.png','.jpg','.jpeg','.webp','.gif','.bmp'):return None
+        row=self.session_row(backend,sid)
+        cwd=Path(row.get('cwd') or '')
+        if not candidate.is_absolute():
+            if not cwd.is_absolute():return None
+            candidate=cwd/candidate
+        paths=[]
+        if backend=='codex':
+            store=self.server.bridge.store
+            if not hasattr(store,'history'):return None
+            for turn in store.history(sid).get('turns',[]):
+                for item in turn.get('items',[]):
+                    if item.get('type') in ('function_call','custom_tool_call','imageView'):
+                        paths.extend(image_paths(item))
+        elif backend=='claude':
+            paths=self.server.claude.run(self.server.claude.image_reads(sid))
+        for value in paths:
+            if value.startswith('\\\\') or '\0' in value:continue
+            path=Path(value)
+            if not path.is_absolute() and cwd.is_absolute():path=cwd/path
+            if path.is_absolute() and path.resolve()==candidate.resolve() and path.is_file():return path.resolve()
+        return None
+
+    def resolve_file(self, backend, sid, query):
         artifact = query.get('artifact', [''])[0]
         requested = query.get('path', [''])[0]
         if artifact and backend == 'codex':
@@ -543,6 +600,8 @@ class NativeFeatures:
                     candidate = self.contained(base, requested)
                     if candidate.is_file(): path = candidate; break
                 except (ValueError, OSError): continue
+            if path is None:
+                path=self.read_image_path(backend,sid,requested)
             if path is None:
                 detail = self.detail(backend, sid)
                 match = next((a for a in detail.get('files', []) if a.get('absolutePath', '').replace('\\', '/') == requested.replace('\\', '/')), None) if backend == 'codex' else None
@@ -562,15 +621,28 @@ class NativeFeatures:
                 else:
                     path = self.contained(usable[0], requested)
         if not path.is_file(): raise ValueError('文件不存在')
-        if path.stat().st_size > MAX_FILE: raise ValueError('预览文件不能超过 12 MB，请在电脑打开')
+        return path
+
+    def file(self, backend, sid, query):
+        path=self.resolve_file(backend,sid,query)
+        if isinstance(path,dict):return path
+        if query.get('render',[''])[0]=='1' and path.suffix.lower() in ('.doc','.docx','.ppt','.pptx','.xls','.xlsx','.odt','.odp','.ods','.rtf'):
+            return self.server.preview.request(path,query)
+        stat = path.stat()
+        if stat.st_size > MAX_FILE: raise ValueError('预览文件不能超过 12 MB，请在电脑打开')
+        # Validate cached bytes only after resolving and authorising the path again.
+        revision = hashlib.sha256(f'{path}:{stat.st_mtime_ns}:{stat.st_ctime_ns}:{stat.st_size}'.encode()).hexdigest()
+        if query.get('known', [''])[0] == revision:
+            return {'unchanged': True, 'revision': revision, 'name': path.name, 'size': stat.st_size}
         with path.open('rb') as stream: data = stream.read(MAX_FILE+1)
         if len(data) > MAX_FILE: raise ValueError('预览文件不能超过 12 MB，请在电脑打开')
         mime = mimetypes.guess_type(path.name)[0] or 'application/octet-stream'
-        binary = mime.startswith('image/') or mime == 'application/pdf'
+        office = path.suffix.lower() in ('.doc', '.ppt', '.xls', '.docx', '.pptx', '.xlsx') or 'openxmlformats' in mime
+        binary = mime.startswith(('image/', 'audio/', 'video/')) or mime == 'application/pdf' or office
         # A second base64 copy doubles the payload of a large text preview, where
         # the phone only needs it to save or share the file.
         bulk = not binary and len(data) > 128*1024
-        result = {'name': path.name, 'mime': mime, 'size': len(data)}
+        result = {'name': path.name, 'mime': mime, 'size': len(data), 'revision': revision}
         if binary or not bulk or query.get('raw', [''])[0] == '1': result['data'] = base64.b64encode(data).decode()
         if not binary:
             try:
@@ -727,22 +799,73 @@ class NativeFeatures:
             for key in list(self.message_revisions)[:self.CACHE_BATCH]:self.message_revisions.pop(key,None)
         return revision
 
+    def source_changed(self,backend):
+        with self.status_lock:
+            self.read_versions[backend]=self.read_versions.get(backend,0)+1
+            if not hasattr(self,'status_versions'):self.status_versions={}
+            self.status_versions[backend]=self.status_versions.get(backend,0)+1
+            self.status_cache=(0,{})
+            self.list_cache.pop(backend,None)
+            for key in list(self.detail_cache):
+                if key[0]==backend:self.detail_cache.pop(key,None)
+
     def task_status(self):
-        # The lock only guards the cache tuple: holding it across the bridge calls
-        # below serialised every concurrent poll behind one slow backend read.
-        with self.status_lock:
-            cached = self.status_cache
-        if time.monotonic()-cached[0] < 5: return cached[1]
-        value = self._task_status_uncached()
-        with self.status_lock:
-            # A writer may have invalidated the cache while this read was running;
-            # republishing then would resurrect data the write had just dropped.
-            if self.status_cache[0] >= cached[0]: self.status_cache = (time.monotonic(), value)
-            return self.status_cache[1]
+        return self._task_status_uncached()
 
     def _task_status_uncached(self):
+        callbacks=[]
+        with self.status_lock:
+            if getattr(self,'status_closed',False):return {'tasks':[],'unavailable':['codex','claude','deepseek']}
+            if not hasattr(self,'status_pool'):
+                self.status_pool=ThreadPoolExecutor(max_workers=3,thread_name_prefix='task-provider')
+                self.status_jobs={};self.status_sources={};self.status_applied={};self.reply_revisions={}
+            if not hasattr(self,'status_versions'):self.status_versions={}
+            for backend in ('codex','claude','deepseek'):
+                version=self.status_versions.get(backend,0)
+                if backend not in self.status_jobs and self.status_applied.get(backend,-1)<version:
+                    job=self.status_pool.submit(self._backend_task_status,backend)
+                    self.status_jobs[backend]=job;callbacks.append((backend,version,job))
+            jobs=tuple(self.status_jobs.values())
+        for backend,version,job in callbacks:
+            job.add_done_callback(lambda future,b=backend,v=version:self._status_finished(b,v,future))
+        if jobs:wait(jobs,timeout=.35)
+        with self.status_lock:
+            tasks=[];unavailable=[]
+            for backend in ('codex','claude','deepseek'):
+                value=self.status_sources.get(backend,{'tasks':[],'unavailable':[backend]})
+                tasks.extend(value['tasks']);unavailable.extend(value['unavailable'])
+            return {'tasks':tasks,'unavailable':list(dict.fromkeys(unavailable))}
+
+    def _status_finished(self,backend,version,job):
+        try:value=job.result()
+        except Exception:value={'tasks':[],'unavailable':[backend]}
+        with self.status_lock:
+            if getattr(self,'status_closed',False):return
+            if self.status_jobs.get(backend) is not job:return
+            self.status_jobs.pop(backend,None)
+            # A busy stream may change again before a slow read finishes. Publish
+            # this completed read, then collect the newer version; dropping every
+            # in-flight result would freeze the overlay until generation stops.
+            if version>=self.status_applied.get(backend,-1):
+                self.status_applied[backend]=version
+                if value['tasks'] or backend not in value['unavailable'] or backend not in self.status_sources:
+                    self.status_sources[backend]=value
+                else:self.status_sources[backend]={**self.status_sources[backend],'unavailable':[backend]}
+            self.status_cache=(0,{})
+        live=getattr(getattr(self,'server',None),'live',None)
+        if live:live.invalidate(topic='status')
+
+    def close(self):
+        with self.status_lock:self.status_closed=True
+        pool=getattr(self,'status_pool',None)
+        if pool:pool.shutdown(wait=False,cancel_futures=True)
+        projects=getattr(self,'git_projects',None)
+        if projects:projects.close()
+
+    def _backend_task_status(self, backend):
         tasks = []; errors = []
-        try:
+        if backend=='codex':
+          try:
             for row in self.server.bridge.task_statuses(include_recent=True).get('tasks', []):
                 if row.get('host', 'local') != 'local': continue
                 task = {**row, 'backend': 'codex'}
@@ -756,25 +879,27 @@ class NativeFeatures:
                 try:task['messageRevision']=self.codex_message_revision(row['id'])
                 except Exception:pass
                 tasks.append(task)
-        except Exception: errors.append('codex')
-        try:
+          except Exception: errors.append('codex')
+        if backend=='claude':
+          try:
             rows, partial_errors = self.server.claude.run(self.server.claude.listing())
             if partial_errors: errors.append('claude')
             tasks += [{'id': r['id'], 'backend': 'claude', 'title': r['title'], 'status': r['status'],
                        'error': r.get('error', False), 'token': str(r.get('updatedAt', '')),
                        'attention': self.attention(r.get('requests', []))} for r in rows if not r['archived']]
-        except Exception: errors.append('claude')
-        try:
+          except Exception: errors.append('claude')
+        if backend=='deepseek':
+          try:
             rows=self.server.deepseek.call('list')['sessions']
             tasks += [{'id':r['id'],'backend':'deepseek','title':r['title'],'status':r['status'],'token':str(r.get('updatedAt','')),
                        'attention':self.attention(r.get('requests',[]))} for r in rows if not r.get('archived')]
-        except Exception:errors.append('deepseek')
+          except Exception:errors.append('deepseek')
         if not hasattr(self,'reply_revisions'):self.reply_revisions={}
         # One transcript read per session: the overlay needs both a content
         # revision and a progress line, and asking twice doubles the load.
         running=('active','running','working','inProgress')
         budget=4;deadline=time.monotonic()+12
-        for task in tasks:
+        for task in sorted(tasks,key=lambda task: task.get('status') not in running and not task.get('attention')):
             if task['backend']=='codex':continue
             key=(task['backend'],task['id']);cached=self.reply_revisions.get(key)
             signature=(task.get('token'),task.get('status'))
@@ -800,7 +925,7 @@ class NativeFeatures:
             except Exception:task['progress']='正在思考…'
         for task in tasks:
             if task.get('status') in running and not task.get('progress'):task['progress']='正在思考…'
-        value = {'tasks': tasks, 'unavailable': errors}; self.status_cache = (time.monotonic(), value); return value
+        return {'tasks': tasks, 'unavailable': errors}
 
     @staticmethod
     def attention(requests):

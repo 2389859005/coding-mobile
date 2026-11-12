@@ -6,6 +6,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Windows.Automation;
+using System.Windows.Forms;
 
 class ClaudeKeyboard {
     [StructLayout(LayoutKind.Sequential)] struct INPUT { public uint type; public UNION data; }
@@ -30,8 +31,20 @@ class ClaudeKeyboard {
     [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr window);
     [DllImport("user32.dll")] static extern bool IsWindow(IntPtr window);
     [DllImport("user32.dll")] static extern bool PostMessage(IntPtr window,uint message,IntPtr wparam,IntPtr lparam);
+    [DllImport("user32.dll")] static extern uint GetClipboardSequenceNumber();
+    [DllImport("user32.dll")] static extern IntPtr GetClipboardOwner();
     static string executable;
-    static void Stage(string text) {Console.WriteLine(text);Console.Out.Flush();}
+    static readonly Stopwatch elapsed=Stopwatch.StartNew();
+    static void Stage(string text) {Console.WriteLine(elapsed.ElapsedMilliseconds+" ms · "+text);Console.Out.Flush();}
+    // A busy Chromium accessibility provider must not hold the helper for minutes.
+    // These workers inspect/focus UIA; all script input stays on the main thread.
+    static T Inspect<T>(Func<T> read) {
+        T value=default(T);Exception failure=null;
+        var worker=new Thread(()=>{try{value=read();}catch(Exception error){failure=error;}});
+        worker.IsBackground=true;worker.SetApartmentState(ApartmentState.MTA);worker.Start();
+        if(!worker.Join(3000))throw new Exception("Claude Console 无障碍接口未响应，已停止输入；待窗口恢复后点重新连接");
+        if(failure!=null)throw failure;return value;
+    }
     static void Activate(IntPtr window) {
         uint ignored,current=GetCurrentThreadId(),foreground=GetWindowThreadProcessId(GetForegroundWindow(),out ignored);
         bool attached=foreground!=0&&foreground!=current&&AttachThreadInput(current,foreground,true);
@@ -57,13 +70,16 @@ class ClaudeKeyboard {
     }
     static void CheckPrompt(AutomationElement prompt) {
         CheckForeground();
+        if(!Inspect(()=>HasPromptFocus(prompt)))throw new Exception("Console 输入焦点已改变，自动输入已取消");
+    }
+    static bool HasPromptFocus(AutomationElement prompt) {
         var focused=AutomationElement.FocusedElement;
         for(int i=0;i<5 && focused!=null;i++,focused=TreeWalker.ControlViewWalker.GetParent(focused))
-            if (Automation.Compare(prompt,focused)||IsPrompt(focused)) return;
-        throw new Exception("Console 输入焦点已改变，自动输入已取消");
+            if (Automation.Compare(prompt,focused)) return true;
+        return false;
     }
     static void FocusPrompt(AutomationElement prompt) {
-        prompt.SetFocus();
+        Inspect(()=>{prompt.SetFocus();return true;});
         for(int i=0;i<10;i++){Thread.Sleep(100);CheckForeground();try{CheckPrompt(prompt);return;}catch{}}
         CheckPrompt(prompt);
     }
@@ -73,7 +89,8 @@ class ClaudeKeyboard {
     }
     static void Shortcut() { CheckForeground();Send(new[]{Key(17,false),Key(18,false),Key(73,false),Key(73,true),Key(18,true),Key(17,true)}); }
     static AutomationElement ConsolePrompt() {
-        return ConsolePrompt(AutomationElement.FromHandle(GetForegroundWindow()));
+        IntPtr window=GetForegroundWindow();
+        return Inspect(()=>ConsolePrompt(AutomationElement.FromHandle(window)));
     }
     static AutomationElement ConsolePrompt(AutomationElement root) {
         var elements=root.FindAll(TreeScope.Descendants,new OrCondition(
@@ -88,7 +105,7 @@ class ClaudeKeyboard {
         return title.StartsWith("Developer Tools - ",StringComparison.Ordinal)||title.StartsWith("DevTools - ",StringComparison.Ordinal)||title.StartsWith("开发者工具 - ",StringComparison.Ordinal);
     }
     static void CloseDevTools() {
-        // Called only after the parent verifies the signed bridge heartbeat.
+        // Called only after the parent receives the bridge heartbeat.
         // Detached tools close by their exact Claude-owned window, without
         // activating another app or ever sending a close to Claude's main UI.
         var windows=new System.Collections.Generic.List<IntPtr>();
@@ -136,42 +153,103 @@ class ClaudeKeyboard {
         if(text!=null) return text;
         throw new Exception("无法核对 Console 内容，已停止输入");
     }
-    static string Contents(AutomationElement prompt) {
+    static string Contents(AutomationElement prompt) {return Inspect(()=>ReadPrompt(prompt));}
+    static string ReadPrompt(AutomationElement prompt) {
         object pattern;string text=null,value=null;
         if(prompt.TryGetCurrentPattern(TextPattern.Pattern,out pattern)) text=((TextPattern)pattern).DocumentRange.GetText(-1);
         if(!String.IsNullOrEmpty(text))return text.TrimEnd('\r','\n');
         if(prompt.TryGetCurrentPattern(ValuePattern.Pattern,out pattern)) value=((ValuePattern)pattern).Current.Value;
         return ReadContents(text,value).TrimEnd('\r','\n');
     }
-    static void Verify(AutomationElement prompt,string expected,string path) {
-        string actual="";
-        for(int attempt=0;attempt<40;attempt++) {
-            Thread.Sleep(50);CheckPrompt(prompt);actual=Contents(prompt);
-            if(actual==expected)return;
-        }
-        File.WriteAllText(path+".observed",actual,new UTF8Encoding(false));
-        Stage("Console 校验：预期 "+expected.Length+" 字符，读取 "+actual.Length+" 字符");
-        throw new Exception("Console 本段输入未完整到达，未执行；再次连接会自动恢复连接脚本");
+    static void ControlKey(ushort key) {
+        Send(new[]{Key(17,false),Key(key,false),Key(key,true),Key(17,true)});
     }
-    static void Type(AutomationElement prompt,string text,string path) {
-        for(int offset=0;offset<text.Length;offset+=128) {
-            CheckPrompt(prompt);int count=Math.Min(128,text.Length-offset);
-            // Small paced bursts avoid saturating Chromium's event queue. Full
-            // prefix verification happens every 128 characters; larger chunks
-            // were observed to lose a whole segment in real Chromium consoles.
-            for(int burst=0;burst<count;burst+=32) {
-            CheckForeground();int length=Math.Min(32,count-burst);var keys=new INPUT[length*2];
-            for(int n=0;n<length;n++) {
-                var down=new INPUT();down.type=1;down.data.key.scan=text[offset+burst+n];down.data.key.flags=4;
-                var up=down;up.data.key.flags=6;keys[2*n]=down;keys[2*n+1]=up;
+    // Materialize all advertised formats before taking temporary ownership.
+    // Keep clipboard data in memory only; never restore over a newer user copy.
+    sealed class ClipboardLease : IDisposable {
+        readonly DataObject backup=new DataObject();
+        readonly bool wasEmpty;
+        uint sequence;
+        bool changed,restored;
+        public ClipboardLease() {
+            sequence=GetClipboardSequenceNumber();
+            var original=Clipboard.GetDataObject();
+            var formats=original==null?new string[0]:original.GetFormats(false);
+            wasEmpty=formats.Length==0;
+            foreach(string format in formats) {
+                object value=original.GetData(format,false);
+                var stream=value as MemoryStream;
+                if(stream!=null)value=new MemoryStream(stream.ToArray());
+                var image=value as System.Drawing.Image;
+                if(image!=null)value=image.Clone();
+                if(value==null)throw new Exception("无法备份剪贴板格式，已停止 Console 输入");
+                backup.SetData(format,false,value);
             }
-            Send(keys);
-            Thread.Sleep(8);
+            Check();
+        }
+        public void Check() {
+            if(GetClipboardSequenceNumber()!=sequence)throw new Exception("剪贴板已被其他操作更新，已停止输入并保留新内容");
+        }
+        public void SetText(string text) {
+            Check();
+            var data=new DataObject();data.SetData(DataFormats.UnicodeText,false,text);
+            Clipboard.SetDataObject(data,true,3,100);
+            sequence=GetClipboardSequenceNumber();changed=true;
+        }
+        public string CopyPrompt(AutomationElement prompt,bool allowEmpty) {
+            CheckPrompt(prompt);
+            string marker="coding-remote-copy-"+Guid.NewGuid().ToString("N");
+            SetText(marker);
+            ControlKey(65);ControlKey(67);
+            var deadline=Stopwatch.StartNew();
+            while(GetClipboardSequenceNumber()==sequence&&deadline.ElapsedMilliseconds<1500) {
+                Thread.Sleep(50);CheckPrompt(prompt);
             }
-            // Backpressure is essential: SendInput success only means queued,
-            // not that a long, syntax-highlighted Console accepted the text.
-            Verify(prompt,text.Substring(0,offset+count),path);
-            if((offset+count)%1024==0)Stage("已核对 "+(offset+count)+" / "+text.Length+" 字符");
+            if(GetClipboardSequenceNumber()==sequence) {
+                if(allowEmpty&&String.IsNullOrEmpty(Contents(prompt)))return "";
+                throw new Exception("无法复制核对 Console 内容，已保留草稿且未执行");
+            }
+            uint owner;GetWindowThreadProcessId(GetClipboardOwner(),out owner);
+            if(!Owned((int)owner))throw new Exception("剪贴板已被其他应用更新，已停止输入并保留新内容");
+            sequence=GetClipboardSequenceNumber();
+            string value=Clipboard.GetText(TextDataFormat.UnicodeText);
+            Check();CheckPrompt(prompt);
+            return value;
+        }
+        public void Restore() {
+            if(restored||!changed)return;
+            Check();
+            if(wasEmpty)Clipboard.Clear();else Clipboard.SetDataObject(backup,true,3,100);
+            sequence=GetClipboardSequenceNumber();restored=true;
+        }
+        public void Dispose() {
+            if(changed&&!restored&&GetClipboardSequenceNumber()==sequence)Restore();
+        }
+    }
+    static bool ConnectorDraft(string pending) {
+        return (pending.StartsWith("void eval(\"/* Injected into the Claude renderer")&&pending.Contains("__claudeMobileBridge"))
+            ||pending.StartsWith("void eval(\"/* coding remote loader */")
+            ||pending.StartsWith("/* coding remote script */")
+            ||pending.StartsWith("window.__claudeMobileBridge?.stop()");
+    }
+    static void PasteVerified(AutomationElement prompt,string text,string path) {
+        FocusPrompt(prompt);
+        using(var clipboard=new ClipboardLease()) {
+            string pending=clipboard.CopyPrompt(prompt,true);
+            if(!String.IsNullOrWhiteSpace(pending)) {
+                if(!ConnectorDraft(pending))throw new Exception("Console 已有未提交内容，已保留；清空后通过 Claude 标题重试");
+                File.WriteAllText(path+".previous",pending,new UTF8Encoding(false));
+                Stage("已备份上次未提交的连接脚本");
+            }
+            CheckPrompt(prompt);clipboard.SetText(text);
+            Stage("正在一次性粘贴连接脚本");
+            ControlKey(65);ControlKey(86);Thread.Sleep(500);
+            string observed=clipboard.CopyPrompt(prompt,false);
+            if(observed!=text)throw new Exception("Console 内容核对不一致（预期 "+text.Length+"，实际 "+observed.Length+" 字符），已保留草稿且未执行");
+            clipboard.Restore();
+            CheckPrompt(prompt);Send(new[]{Key(39,false),Key(39,true)});
+            Stage("已核对完整脚本并恢复剪贴板，正在提交");
+            Send(new[]{Key(13,false),Key(13,true)});Thread.Sleep(700);
         }
     }
     [STAThread] static int Main(string[] args) {
@@ -181,6 +259,7 @@ class ClaudeKeyboard {
                 if(Marshal.SizeOf(typeof(INPUT))!=(IntPtr.Size==8?40:28)||!PromptName("Console prompt","")||PromptName("Message Claude","")) throw new Exception("键盘组件自检失败");
                 if(ReadContents("script","")!="script"||ReadContents("","value")!="value"||ReadContents(null,"value")!="value"||ReadContents("",null)!="")throw new Exception("Console 文本读取自检失败");
                 if(!DevToolsTitle("Developer Tools - app://localhost/new")||!DevToolsTitle("DevTools - app://localhost")||DevToolsTitle("Claude"))throw new Exception("开发者工具窗口匹配自检失败");
+                if(!ConnectorDraft("window.__claudeMobileBridge?.stop();")||ConnectorDraft("window.userCommand()")||ConnectorDraft("wind"))throw new Exception("连接脚本草稿识别自检失败");
                 Console.WriteLine("keyboard ABI, Console allowlist and contenteditable text fallback OK");return 0;
             }
             if(args.Length!=2) throw new Exception("键盘连接参数无效");
@@ -188,7 +267,7 @@ class ClaudeKeyboard {
             if(!Owned(process.Id)) throw new Exception("目标不是 Claude");
             if(args[1]=="--close-devtools") {CloseDevTools();return 0;}
             string text=File.ReadAllText(args[1],Encoding.UTF8);
-            if(text.Length>300000||text.Contains("\n")||text.Contains("\r")||!text.StartsWith("/* coding remote script */")) throw new Exception("连接脚本格式无效");
+            if(text.Length>300000||text.Contains("\n")||text.Contains("\r")||!text.StartsWith("window.__claudeMobileBridge?.stop()")) throw new Exception("连接脚本格式无效");
             Stage("正在等待 Claude 窗口");
             IntPtr window=process.MainWindowHandle;
             var readyDeadline=DateTime.UtcNow.AddSeconds(20);
@@ -202,25 +281,11 @@ class ClaudeKeyboard {
             Stage("等待 Console 输入框");
             var deadline=DateTime.UtcNow.AddSeconds(12);
             while(prompt==null&&DateTime.UtcNow<deadline) {
-                Thread.Sleep(250);CheckForeground();SelectConsoleTab();prompt=ConsolePrompt();
+                Thread.Sleep(250);CheckForeground();Inspect(()=>{SelectConsoleTab();return true;});prompt=ConsolePrompt();
             }
             if(prompt==null) throw new Exception("找不到 Claude Console 输入框，请确认已允许开发者工具后通过标题重试");
             Stage("已定位 Console 输入框");
-            string pending=Contents(prompt).Trim('\r','\n',' ','\t','\u200b','\ufeff');
-            if(!String.IsNullOrWhiteSpace(pending)) {
-                // Recover only a draft emitted by this connector, preserving a
-                // backup. Arbitrary user Console commands are never overwritten.
-                if(!(pending.StartsWith("void eval(\"/* Injected into the Claude renderer")&&pending.Contains("__claudeMobileBridge"))&&!pending.StartsWith("void eval(\"/* coding remote loader */")&&!pending.StartsWith("/* coding remote script */"))
-                    throw new Exception("Console 已有未提交内容，已保留（长度 "+pending.Length+"，首字符 U+"+((int)pending[0]).ToString("X4")+"）；清空后通过 Claude 标题重试");
-                File.WriteAllText(args[1]+".previous",pending,new UTF8Encoding(false));
-                FocusPrompt(prompt);Send(new[]{Key(17,false),Key(65,false),Key(65,true),Key(17,true),Key(8,false),Key(8,true)});
-                Verify(prompt,"",args[1]);
-                Stage("已备份并清除上次未提交的连接脚本");
-            }
-            FocusPrompt(prompt);Type(prompt,text,args[1]);CheckPrompt(prompt);
-            Stage("脚本输入完成，正在核对");
-            Verify(prompt,text,args[1]);
-            Send(new[]{Key(13,false),Key(13,true)});Thread.Sleep(700);
+            PasteVerified(prompt,text,args[1]);
             Console.WriteLine("脚本已输入，等待连接回执");return 0;
         } catch(Exception e) {Console.WriteLine(e is System.ComponentModel.Win32Exception?"无法读取 Claude 窗口，请检查运行权限":e.Message);return 1;}
     }

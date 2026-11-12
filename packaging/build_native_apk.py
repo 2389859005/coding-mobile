@@ -35,11 +35,11 @@ def build_in(work, source=None):
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="io.github.abyxs.codingremote">
 <uses-permission android:name="android.permission.INTERNET"/><uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/><uses-permission android:name="android.permission.CAMERA"/>
 <uses-permission android:name="android.permission.VIBRATE"/>
-<uses-permission android:name="android.permission.POST_NOTIFICATIONS"/><uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/><uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/><uses-permission android:name="android.permission.FOREGROUND_SERVICE"/><uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+<uses-permission android:name="android.permission.POST_NOTIFICATIONS"/><uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/><uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
 <uses-feature android:name="android.hardware.camera" android:required="false"/>
 <application android:name="io.github.abyxs.codingremote.AppVisibility" android:extractNativeLibs="true" android:allowBackup="false" android:debuggable="false" android:label="coding远程" android:icon="@drawable/product_icon" android:theme="@style/AppTheme" android:usesCleartextTraffic="true">
 <activity android:name="io.github.abyxs.codingremote.MainActivity" android:exported="true" android:launchMode="singleTop" android:windowSoftInputMode="stateAlwaysHidden|adjustResize" android:configChanges="keyboardHidden|orientation|screenSize"><intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter></activity>
-<service android:name="io.github.abyxs.codingremote.TaskNotificationService" android:exported="false" android:foregroundServiceType="dataSync"/>
+<service android:name="io.github.abyxs.codingremote.TaskNotificationService" android:exported="false"/>
 <service android:name="io.github.abyxs.codingremote.TaskCheckJob" android:permission="android.permission.BIND_JOB_SERVICE" android:exported="true"/>
 <provider android:name="io.github.abyxs.codingremote.PreviewProvider" android:authorities="io.github.abyxs.codingremote.previews" android:exported="false" android:grantUriPermissions="true"/>
 <activity android:name="io.github.abyxs.codexmobile.QrScannerActivity" android:exported="false" android:screenOrientation="fullSensor" android:theme="@style/AppTheme" android:configChanges="keyboardHidden|orientation|screenSize"/>
@@ -59,12 +59,12 @@ def build_in(work, source=None):
     (decoded/'res/values/styles.xml').write_text('''<?xml version="1.0" encoding="utf-8"?>
 <resources>
   <style name="AppTheme" parent="@android:style/Theme.Material.Light.NoActionBar">
-    <item name="android:windowBackground">#f6f7f2</item>
+    <item name="android:windowBackground">#F0F4FD</item>
     <item name="android:windowActionModeOverlay">true</item>
     <item name="android:fontFamily">sans</item>
-    <item name="android:colorAccent">#27634d</item>
-    <item name="android:statusBarColor">#f6f7f2</item>
-    <item name="android:navigationBarColor">#f6f7f2</item>
+    <item name="android:colorAccent">#4B67B4</item>
+    <item name="android:statusBarColor">#F0F4FD</item>
+    <item name="android:navigationBarColor">#F0F4FD</item>
     <item name="android:windowLightStatusBar">true</item>
     <item name="android:windowLightNavigationBar">true</item>
     <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
@@ -76,11 +76,11 @@ def build_in(work, source=None):
 </resources>''',encoding='utf-8')
     (decoded/'res/layout/activity_main.xml').write_text('<?xml version="1.0" encoding="utf-8"?><FrameLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent"/>',encoding='utf-8')
     yml=decoded/'apktool.yml';metadata=yml.read_text('utf-8')
-    metadata=re.sub(r'(?m)^(\s*versionCode:).*$',r'\g<1> 22020000',metadata)
-    metadata=re.sub(r'(?m)^(\s*versionName:).*$',r'\g<1> 2.2.2',metadata)
+    metadata=re.sub(r'(?m)^(\s*versionCode:).*$',r'\g<1> 22050000',metadata)
+    metadata=re.sub(r'(?m)^(\s*versionName:).*$',r'\g<1> 2.2.5',metadata)
     yml.write_text(metadata,encoding='utf-8')
     run(java,'-jar',ROOT/'.local/build-tools/apktool.jar','b',decoded,'-o',work/'base.apk')
-    run(java.with_name('javac.exe'),'-encoding','UTF-8','-source','8','-target','8','-classpath',android,'-d',classes,*sorted((ROOT/'packaging/android/native').glob('*.java')))
+    run(java.with_name('javac.exe'),'-encoding','UTF-8','-source','8','-target','8','-classpath',str(android),'-d',classes,*sorted((ROOT/'packaging/android/native').glob('*.java')))
     # Invoke Java directly: cmd.exe's batch argument limit is shorter than the class list.
     run(java,'-Xmx1024M','-cp',bt/'lib/d8.jar','com.android.tools.r8.D8','--release','--min-api','26','--lib',android,'--output',dex,*sorted(classes.rglob('*.class')))
     with zipfile.ZipFile(work/'base.apk') as src,zipfile.ZipFile(work/'unsigned.apk','w',zipfile.ZIP_DEFLATED) as dst:
@@ -88,10 +88,13 @@ def build_in(work, source=None):
             if not info.filename.startswith('META-INF/') and info.filename not in ('classes4.dex','assets/CODING_REMOTE_NOTICE.txt','assets/PRODUCT_ICON_NOTICE.txt'):dst.writestr(info,src.read(info.filename))
         dst.write(dex/'classes.dex','classes4.dex')
         dst.write(ROOT/'packaging/LOCAL_ADAPTER_NOTICE.txt','assets/CODING_REMOTE_NOTICE.txt')
+        for license_path in (ROOT/'licenses').glob('*'):
+            if license_path.is_file() and not license_path.name.startswith(('jsch-', 'eddsa-')):
+                dst.write(license_path,'assets/licenses/'+license_path.name)
         dst.write(ROOT/'packaging/tailnet/THIRD_PARTY_NOTICES.txt','assets/TAILNET_NOTICES.txt')
         dst.write(ROOT/'packaging/android/assets/NOTICE.md','assets/PRODUCT_ICON_NOTICE.txt')
     run(bt/'zipalign.exe','-f','-p','4',work/'unsigned.apk',work/'aligned.apk')
-    target=work/'CodingRemoteAssistant-Android-2.2.2.apk'
+    target=work/'CodingRemoteAssistant-Android-2.2.5.apk'
     run(bt/'apksigner.bat','sign','--v4-signing-enabled','false','--ks',ROOT/'.local/signing/claude-adapter.p12','--ks-key-alias','claude-adapter','--ks-pass','file:'+str(ROOT/'.local/signing/password.txt'),'--out',target,work/'aligned.apk')
     run(bt/'apksigner.bat','verify','--verbose',target);run(bt/'zipalign.exe','-c','-p','4',target)
     output=ROOT/'dist'/target.name;output.parent.mkdir(exist_ok=True);target.replace(output)

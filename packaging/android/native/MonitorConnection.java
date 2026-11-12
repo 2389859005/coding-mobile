@@ -3,10 +3,12 @@ import android.content.*;
 import android.os.*;
 import android.app.job.*;
 
-/** Bound monitoring while the process is alive, with OS-scheduled background catch-up. */
+/** A bound event monitor; no persistent notification or periodic network job. */
 final class MonitorConnection {
     private static ServiceConnection connection;
     static synchronized void start(Context c){Context app=c.getApplicationContext();boolean enabled=c.getSharedPreferences("ui",0).getBoolean("notifications",false)||c.getSharedPreferences("ui",0).getBoolean("overlay",false);if(!enabled){stop(app);return;}
+        ((android.app.NotificationManager)app.getSystemService(Context.NOTIFICATION_SERVICE)).cancel(90);
+        ((JobScheduler)app.getSystemService(Context.JOB_SCHEDULER_SERVICE)).cancel(91);
         if(connection==null){connection=new ServiceConnection(){
             public void onServiceConnected(ComponentName n,IBinder binder){
                 // The service has just built its overlay. Nothing else re-primes it, so an
@@ -21,7 +23,6 @@ final class MonitorConnection {
             }
             public void onServiceDisconnected(ComponentName n){}};
             if(!app.bindService(new Intent(app,TaskNotificationService.class),connection,Context.BIND_AUTO_CREATE))connection=null;}
-        try{JobScheduler jobs=(JobScheduler)app.getSystemService(Context.JOB_SCHEDULER_SERVICE);jobs.schedule(new JobInfo.Builder(91,new ComponentName(app,TaskCheckJob.class)).setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY).setPeriodic(15*60*1000).setPersisted(true).build());}catch(Exception ignored){}
     }
-    static synchronized void stop(Context app){if(connection!=null){try{app.unbindService(connection);}catch(Exception ignored){}connection=null;}((JobScheduler)app.getSystemService(Context.JOB_SCHEDULER_SERVICE)).cancel(91);}
+    static synchronized void stop(Context app){if(connection!=null){try{app.unbindService(connection);}catch(Exception ignored){}connection=null;}app.stopService(new Intent(app,TaskNotificationService.class));((JobScheduler)app.getSystemService(Context.JOB_SCHEDULER_SERVICE)).cancel(91);}
 }

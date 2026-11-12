@@ -77,6 +77,11 @@ final class PetSprite extends Drawable {
     // idleLove drifts up on its own every few seconds while the pet is idle. They are
     // what stop the sprite from looking like a still image when nothing is happening.
     private float greet,idleLove;
+    // One-shot event cue. The overlay sets this when a meaningful transition
+    // arrives; the cue fades with the animation clock instead of competing with
+    // the long-lived task state.
+    private String event="";
+    private float eventPulse;
     // Touch reactions, set by the overlay and decayed here. Each is a separate
     // amount rather than one "reacting" flag so a stroke and a poke can overlap
     // without either canceling the other.
@@ -86,11 +91,10 @@ final class PetSprite extends Drawable {
     //   startle  a long press has gone on too long: the pet snaps awake
     private float stroke,startle,poke;
     private int taps;
-    private int badgeColor=0xff7b8794,badgeCount;
 
     PetSprite(String form,int ink,int paper,int size){this.ink=ink;this.paper=paper;this.size=size;form(form);setBounds(0,0,size,size);}
     String form(){return form;}
-    void badge(int color,int count){badgeColor=color;badgeCount=Math.max(0,Math.min(99,count));invalidateSelf();}
+    void event(String value){event=value==null?"":value;eventPulse=event.isEmpty()?0f:1f;invalidateSelf();}
     void form(String value){
         form=FORMS[index(value)];
         switch(form){
@@ -135,6 +139,7 @@ final class PetSprite extends Drawable {
         // caught it. Roughly 0.6s of visible decay reads as a reaction.
         this.poke=poked?Math.min(1f,this.poke+.34f):Math.max(0f,this.poke-.032f);
         this.taps=Math.max(0,taps);
+        this.eventPulse=Math.max(0f,this.eventPulse-.024f);
         invalidateSelf();
     }
 
@@ -171,42 +176,7 @@ final class PetSprite extends Drawable {
         canvas.scale(fit,fit);
         canvas.clipRect(0,0,64,64);
         dim=offline?.45f:1f;
-        float lift=hop*(1f-.35f*hop);
-        float wave=(float)Math.sin(phase*2*Math.PI);
-        float beat=(float)Math.sin(phase*2*Math.PI*2);
-        // The breathing squash: narrow and tall on the way up, wide and short on the
-        // way down, anchored at the feet so the pet never looks like it is sinking.
-        // The amplitude is nearly twice what it was: at 2.8% idle the pet looked frozen
-        // unless you stared at it, which is not an animation, it is a still image with
-        // sub-pixel drift.
-        float swell=active()?.095f:.062f;
-        // Every remaining form holds still: the pair is a traced reference and the
-        // robot is flat panels, so neither reads better for being swayed.
-        // A stroke is a physical thing, not an overlay: the pet leans into the hand
-        // and presses up, which is what makes it feel like it noticed being touched.
-        // Losing the hand is the opposite - it shrinks back.
-        float lean=stroke*3.4f*(float)Math.sin(phase*2*Math.PI*1.5);
-        // Each running state gets a motion of its own rather than only a static posture,
-        // so which one the pet is in is legible from across the desk: working rocks at a
-        // workman's double time, thinking leans and reclaims, waiting shifts its weight,
-        // and idle keeps its slow sway.
-        float bob=0f,sway=0f;
-        if(state.equals("working")){bob=-2.4f*Math.abs(beat);sway=2.6f*wave;}
-        else if(state.equals("thinking")){bob=-1.5f*(1f-(float)Math.cos(phase*2*Math.PI))/2f;sway=1.8f*(float)Math.sin(phase*3*Math.PI);}
-        else if(state.equals("waiting")){bob=-1.2f*Math.abs(wave);sway=3.2f*wave;}
-        canvas.translate(lean+sway,-15f*lift-stroke*2.6f+startle*1.4f+bob);
-        float shrink=1f-stroke*.045f-startle*.09f;
-        canvas.scale(shrink,shrink,32,57);
-        canvas.translate(32,57);canvas.scale(1-swell*wave*.6f,1+swell*wave);canvas.translate(-32,-57);
-        // Startled: the whole body tips back. Stroked: the head rolls toward the hand.
-        if(startle>0)canvas.rotate(-7f*startle,32,57);
-        else if(stroke>0)canvas.rotate(4.5f*stroke,32,52);
-        if(asleep)canvas.rotate(6,32,57);
-        // A working pet rocks its whole body; thinking just tilts the head. Posture is
-        // part of the animation, not a separate mood label.
-        else if(state.equals("working"))canvas.rotate(3.4f*beat,32,57);
-        else if(state.equals("thinking"))canvas.rotate(5f*(float)Math.sin(phase*2*Math.PI),32,40);
-        else if(state.equals("waiting"))canvas.rotate(2.2f*wave,32,57);
+        // Keep the silhouette stationary; eyes and surrounding cues carry motion.
         boolean shut=asleep||offline||stroke>.35f;
         if(form.equals("maltese"))pair(canvas,shut);
         else robot(canvas,shut);
@@ -217,14 +187,6 @@ final class PetSprite extends Drawable {
         // "more restores than saves" from draw(), on the main thread, on the first frame
         // the pet painted: the overlay crash.
         cue(canvas);
-        // Keep the state cue on the cut-out itself. A dot is enough for a running task;
-        // pending work gets a compact count in the same amber pill.
-        if(badgeColor!=0){
-            float radius=badgeCount>0?7f:5.5f;
-            use(0xffffffff,.96f,0);canvas.drawCircle(54,9,radius+1.6f,paint);
-            use(badgeColor,1f,0);if(badgeCount>0)canvas.drawRoundRect(46,2,62,16,7,7,paint);else canvas.drawCircle(54,9,radius,paint);
-            if(badgeCount>0){paint.setColor(0xffffffff);paint.setAlpha(Math.round(255*dim));paint.setStyle(Paint.Style.FILL);paint.setTextSize(8.5f);paint.setTextAlign(Paint.Align.CENTER);paint.setTypeface(Typeface.DEFAULT_BOLD);canvas.drawText(badgeCount>9?"9+":String.valueOf(badgeCount),54,11.7f,paint);}
-        }
         canvas.restore();
     }
 
@@ -283,6 +245,8 @@ final class PetSprite extends Drawable {
 
     /** Decoded once and shared: the pair is the same pixels for every instance. */
     private static Bitmap pairCache;
+    private final Paint bitmapPaint=new Paint(Paint.FILTER_BITMAP_FLAG);
+    private final float[] mesh=new float[9*9*2];
 
     private Bitmap pair(){
         if(pairCache!=null)return pairCache;
@@ -324,7 +288,29 @@ final class PetSprite extends Drawable {
             eyes(c,closed,32,30,9f,2.8f);
             return;
         }
-        Paint plain=new Paint(Paint.FILTER_BITMAP_FLAG);plain.setAlpha(Math.round(255*dim));c.drawBitmap(bitmap,null,new RectF(0,0,64,64),plain);
+        // State-specific frames deform only ears and paws. The torso and window
+        // anchor stay fixed, like the reference pack's constant content box.
+        float frame=(float)Math.floor((phase-(float)Math.floor(phase))*8)/8;
+        float wave=(float)Math.sin(frame*Math.PI*2);
+        boolean typing=state.equals("working")||state.equals("thinking");
+        boolean happy=state.equals("completed")||poke>.1f||greet>.1f;
+        for(int y=0;y<=8;y++)for(int x=0;x<=8;x++){
+            float px=x*8,py=y*8,dx=0,dy=0;
+            if(!closed&&!state.equals("offline")){
+                float ear=Math.max(0,1-((px-44)*(px-44)+(py-16)*(py-16))/80f);
+                dx+=ear*wave*(happy?2.3f:.8f);
+                float paw=Math.max(0,1-((px-48)*(px-48)+(py-44)*(py-44))/80f);
+                dy+=paw*wave*(typing?1.8f:happy?2.6f:.25f);
+                float goldEar=Math.max(0,1-((px-12)*(px-12)+(py-32)*(py-32))/80f);
+                dx+=goldEar*wave*.8f;
+            }
+            int i=(y*9+x)*2;mesh[i]=px+dx;mesh[i+1]=py+dy;
+        }
+        bitmapPaint.setAlpha(Math.round(255*dim));c.drawBitmapMesh(bitmap,8,8,mesh,0,null,0,bitmapPaint);
+        if(closed||blink>.55f){
+            use(0xffffffff,1,0);c.drawOval(34,29,38,32,paint);c.drawOval(43,24,47,27,paint);
+            use(0xff2b2b2b,1,1);c.drawLine(35,30.5f,37,30,paint);c.drawLine(44,25.5f,46,25,paint);
+        }
     }
 
     /** The robot: the one form with no animal reference, so it is all flat panels. */
@@ -350,6 +336,9 @@ final class PetSprite extends Drawable {
             c.drawRoundRect(37,29-rr,37+rw*2,29+rr,3,3,paint);
         }
         use(detail,1f,1.6f);c.drawLine(24,39,40,39,paint);
+        float typing=state.equals("working")?1.6f*(float)Math.sin(phase*Math.PI*4):0;
+        use(body,1,0);c.drawCircle(18,48+typing,3,paint);c.drawCircle(46,48-typing,3,paint);
+        use(shade,1,1.4f);c.drawCircle(18,48+typing,3,paint);c.drawCircle(46,48-typing,3,paint);
     }
 
     // --- Reactions (actions, never a status label) -------------------------
@@ -411,8 +400,9 @@ final class PetSprite extends Drawable {
             path.reset();path.moveTo(x,y-s);path.lineTo(x+s,y-s);path.lineTo(x,y+s);path.lineTo(x+s,y+s);
             c.drawPath(path,paint);
         }
-        // A new message: the heart, popping in over the shoulder.
-        if(notice>0){
+        // A new message: the heart, popping in over the shoulder. More specific
+        // events below replace this with a stronger visual cue.
+        if(notice>0&&eventPulse<=0){
             float pop=(float)Math.sin(Math.min(1f,notice)*Math.PI),s=.55f+.45f*pop;
             c.save();c.translate(50,12);c.scale(s,s);c.rotate(-10f*(1f-pop));
             use(0xffffffff,.96f,0);c.drawCircle(0,0,11f,paint);
@@ -462,11 +452,42 @@ final class PetSprite extends Drawable {
             c.drawRoundRect(30f,4f+4f*(1f-startle),34f,16f,1.8f,1.8f,paint);
             c.drawCircle(32f,19.5f,2.1f*s,paint);
         }
+        eventCue(c);
         // The hop itself: sparkles that spread and shrink as it decays.
         if(hop>0)for(int i=0;i<3;i++){
             float ax=32+(i-1)*13f,ay=16-10f*hop;
             use(detail,.85f*hop,2f);c.drawLine(ax-3f,ay,ax+3f,ay,paint);c.drawLine(ax,ay-3f,ax,ay+3f,paint);
         }
+    }
+
+    /** Draws a short, icon-like cue for important transitions without text. */
+    private void eventCue(Canvas c){
+        if(eventPulse<=0||event.isEmpty())return;
+        float a=Math.min(1f,eventPulse);
+        if(event.equals(PetStateMachine.ERROR)){
+            use(0xffe2564a,a,2.5f);c.drawRoundRect(30,4,34,16,2,2,paint);c.drawCircle(32,20,2.1f,paint);
+            return;
+        }
+        if(event.equals(PetStateMachine.COMPLETED)){
+            for(int i=0;i<4;i++){
+                double angle=-Math.PI/2+i*Math.PI/2;
+                float radius=13f+4f*(1f-a);
+                star(c,32+(float)Math.cos(angle)*radius,18+(float)Math.sin(angle)*radius,3.1f,0xff2e9b68,a*.9f);
+            }
+            return;
+        }
+        if(event.equals(PetStateMachine.APPROVAL)||event.equals(PetStateMachine.QUESTION)){
+            int color=event.equals(PetStateMachine.APPROVAL)?0xffffa62b:0xff4d8fe8;
+            use(0xffffffff,a*.95f,0);c.drawCircle(49,10,10,paint);
+            use(color,a,2f);c.drawCircle(49,10,10,paint);
+            use(color,a,2.2f);c.drawCircle(45,10,1.2f,paint);c.drawCircle(53,10,1.2f,paint);c.drawLine(45,14,53,14,paint);
+            return;
+        }
+        if(event.equals("offline")){
+            use(0xff7b8794,a,2.5f);c.drawLine(22,12,42,28,paint);c.drawCircle(30,20,9,paint);
+            return;
+        }
+        heart(c,50,12,6.4f,0xffff5d7e,a);
     }
     private float sin01(float t){return (float)Math.sin(Math.PI*t);}
 

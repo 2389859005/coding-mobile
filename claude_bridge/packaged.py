@@ -29,25 +29,30 @@ class Controller:
     def __init__(self, data_dir, reconnect=False, transport="file"):
         self.directory = Path(data_dir).resolve() / 'claude'
         self.directory.mkdir(parents=True, exist_ok=True)
-        config_file = self.directory / 'desktop.json'
-        if config_file.exists():
-            config = json.loads(config_file.read_text('utf-8'))
-        else:
-            config = {'token': secrets.token_urlsafe(32)}
-            config_file.write_text(json.dumps(config), encoding='utf-8')
         if transport == 'cdp':
+            config_file = self.directory / 'desktop.json'
+            if config_file.exists():
+                config = json.loads(config_file.read_text('utf-8'))
+            else:
+                config = {'token': secrets.token_urlsafe(32)}
+                config_file.write_text(json.dumps(config), encoding='utf-8')
             from .cdp_desktop import CdpDesktop
             self.desktop = CdpDesktop(config['token'])
         else:
-            self.desktop = FileDesktop(self.directory, config['token'])
+            self.desktop = FileDesktop(self.directory)
         workspace = self.directory.parent.parent
-        script_config = {'transport': transport, 'cwd': str(workspace), 'token': config['token'],
-                         'generation': self.desktop.generation, 'reconnect': reconnect,
+        script_config = {'cwd': str(workspace), 'reconnect': reconnect,
                          'request': (self.directory/'request.json').relative_to(workspace).as_posix(),
                          'response': (self.directory/'response.json').relative_to(workspace).as_posix()}
+        if transport == 'cdp':
+            script_config.update(transport='cdp', token=config['token'], generation=self.desktop.generation)
+        elif self.desktop.bridge_session:
+            script_config['bridgeSessionId']=self.desktop.bridge_session
+        encoded_config = json.dumps(script_config, ensure_ascii=False, separators=(',', ':'))
         self.workspace = workspace
-        self.script = (ROOT/'desktop-file.js').read_text('utf-8').replace('__BRIDGE_CONFIG__', json.dumps(script_config))
-        self.console_script = (ROOT/'desktop-console.js').read_text('utf-8').replace('__BRIDGE_CONFIG__', json.dumps(script_config))
+        self.script = (ROOT/'desktop-file.js').read_text('utf-8').replace('__BRIDGE_CONFIG__', encoded_config)
+        self._console_template = (ROOT/'desktop-console.js').read_text('utf-8')
+        self._script_config = script_config
         (self.directory/'connect-desktop.js').write_bytes(self.script.encode('utf-8'))
         self.index = {}
         self.catalog_cache = {}
@@ -55,6 +60,13 @@ class Controller:
         self.thread = threading.Thread(target=self.loop.run_forever, daemon=True)
         self.thread.start()
         self.run(self.initialize())
+
+    @property
+    def console_script(self):
+        config=dict(self._script_config)
+        session_id=getattr(self.desktop,'bridge_session','')
+        if session_id:config['bridgeSessionId']=session_id
+        return self._console_template.replace('__BRIDGE_CONFIG__',json.dumps(config,ensure_ascii=False,separators=(',',':')))
 
     async def initialize(self):
         self.lock = asyncio.Lock()
@@ -98,7 +110,7 @@ class Controller:
         return row
 
     async def mutate(self, sid, action, body):
-        if action not in ('send', 'stop', 'respond', 'access', 'settings', 'rename', 'archive', 'delete'):
+        if action not in ('send', 'edit', 'stop', 'respond', 'access', 'settings', 'rename', 'archive', 'delete'):
             raise APIError(404, '不支持的操作')
         rid = str(uuid.UUID(body.get('id', '')))
         fingerprint = hashlib.sha256(json.dumps([sid, action, body], sort_keys=True).encode()).hexdigest()
@@ -132,6 +144,13 @@ class Controller:
                 if kind=='code' and row['status']=='active':
                     while len(args)<5:args.append(None)
                     args.append('now' if body.get('mode')=='steer' else 'next')
+            elif action == 'edit':
+                from coding_remote.message_edit import validate
+                transcript=await self.desktop.call(kind,'getTranscript',native)
+                current=validate({'session':row,'messages':model.transcript(transcript)},body)
+                if not current['eventId']:raise ValueError('原消息缺少标识，请刷新后重试')
+                operations=[('rewindV2',[native,current['eventId']]),('sendMessage',[native,body['text']])]
+                method,args=operations[0]
             elif action in ('rename','archive','delete'):
                 if action=='rename':
                     title=body.get('title','').strip()
@@ -181,6 +200,21 @@ class Controller:
                 rejected = False
                 for operation, arguments in operations:
                     result = await self.desktop.call(kind, operation, *arguments, timeout=90)
+                    if operation == 'rewindV2' and (not isinstance(result,dict) or result.get('prefill') is None):
+                        raise BridgeUnavailable('桌面未确认撤回，已停止重新发送；请核对原会话')
+                    if operation == 'rewindV2':
+                        # Code tears its prior query down during rewind. Wait for
+                        # the stop acknowledgement before creating the next turn.
+                        deadline=time.monotonic()+12
+                        settled=0
+                        while time.monotonic()<deadline:
+                            state=await self.desktop.call(kind,'getSession',native,timeout=5)
+                            idle=not model.session(kind,state)['status']=='active' and not state.get('stopOwed')
+                            settled=settled+1 if idle else 0
+                            if settled>=2:break
+                            await asyncio.sleep(.15)
+                        else:
+                            raise BridgeUnavailable('消息已撤回，上一轮仍在结束中；修改内容已保留，尚未重新发送')
                     rejected = result is False or (isinstance(result, dict) and
                         (result.get('delivered') is False or result.get('dispatched') is False or result.get('ok') is False or result.get('applied') is False))
                     if rejected: break
@@ -200,8 +234,8 @@ class Controller:
                         await asyncio.sleep(0.4)
                     if actual != expected:
                         outcome.update(status='rejected', message='桌面保存的设置与所选值不同，请刷新选项后检查', actual=actual)
-            except BridgeUnavailable:
-                pass
+            except BridgeUnavailable as exc:
+                outcome['message']=str(exc)
             self.db.execute('UPDATE requests SET result=? WHERE id=?', (json.dumps(outcome), rid))
             self.db.commit()
             return outcome
@@ -279,6 +313,20 @@ class Controller:
             {'name':r.get('name','文件'),'path':r.get('path') or (path+'/'+r.get('name','')).lstrip('/'),
              'directory':r.get('isDirectory',r.get('directory',r.get('type')=='directory')),'size':r.get('size',0)} for r in entries if isinstance(r,dict)],'more':False}
 
+    async def image_reads(self,sid):
+        from coding_remote.native_content import image_paths
+        row=await self.session(sid)
+        raw=await self.desktop.call(row['backend'],'getTranscript',row['nativeId'])
+        paths=[]
+        for event in model.rows(raw):
+            message=event.get('message',event)
+            if not isinstance(message,dict) or message.get('role',event.get('type'))!='assistant':continue
+            content=message.get('content',[])
+            if not isinstance(content,list):continue
+            for block in content:
+                if isinstance(block,dict) and block.get('type')=='tool_use':paths.extend(image_paths(block))
+        return paths
+
     async def file(self,sid,query):
         row=await self.session(sid);path=query.get('path',[''])[0]
         if not path or '\0' in path or '..' in Path(path).parts:raise ValueError('文件路径无效')
@@ -308,8 +356,20 @@ class Controller:
             return {'connected':self.desktop.connected,'sessions': sorted([r for r in rows if not kind or r['backend'] == kind],key=lambda r:r['archived']), 'errors': errors}
         parts = path.strip('/').split('/')
         if len(parts) == 2 and parts[0] == 'sessions' and method == 'GET':
-            row = await self.session(parts[1])
-            raw = await self.desktop.call(row['backend'], 'getTranscript', row['nativeId'])
+            sid=parts[1]
+            if sid not in self.index:await self.listing()
+            known=self.index.get(sid)
+            if known and 'mobileSession' in self.desktop.capabilities.get(known['backend'],[]):
+                snapshot=await self.desktop.call(known['backend'],'mobileSession',known['nativeId'])
+                state=snapshot.get('session') or {}
+                if state.get('sessionId')!=known['nativeId']:raise BridgeUnavailable('桌面返回的会话标识不一致')
+                row=model.session(known['backend'],state)
+                from coding_remote.context_usage import normalize
+                row['contextUsage']=normalize(snapshot.get('contextUsage'),'claude')
+                self.index[sid]=row;raw=snapshot.get('transcript',[])
+            else:
+                row = await self.session(sid)
+                raw = await self.desktop.call(row['backend'], 'getTranscript', row['nativeId'])
             messages = model.transcript(raw)
             return {'session': row, 'messages': messages, 'connected': self.desktop.connected,
                     'notice': model.transcript_notice(raw)}

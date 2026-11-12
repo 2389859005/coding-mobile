@@ -5,6 +5,7 @@ import json
 import os
 import secrets
 import shutil
+import sys
 import threading
 import urllib.request
 import urllib.error
@@ -27,7 +28,11 @@ class DeepSeek:
         patch=self.home/'profiles/desktop/cordis.patch.yml'
         if not patch.is_file():return False
         target=self.directory/'mobile-host.mjs'
-        source=Path(__file__).with_name('deepseek-host.mjs')
+        # Frozen bytecode has a synthetic __file__ at the bundle root; the
+        # JavaScript asset remains inside coding_remote in the packaged EXE.
+        assets=Path(getattr(sys,'_MEIPASS',Path(__file__).resolve().parents[1]))
+        source=assets/'coding_remote/deepseek-host.mjs'
+        if not source.is_file():raise BridgeUnavailable('缺少 DeepSeek 桥接组件，请更新 Windows 助手')
         if not target.exists() or target.read_bytes()!=source.read_bytes():shutil.copyfile(source,target)
         marker='# coding-remote-assistant bridge'
         text=patch.read_text('utf-8')
@@ -39,7 +44,17 @@ class DeepSeek:
             temp=patch.with_suffix('.mobile.tmp');temp.write_text(text+suffix,'utf-8');temp.replace(patch)
         return True
 
-    def call(self, action, sid=None, body=None):
+    @property
+    def connected(self):
+        try:return self.call('health',timeout=1.5).get('connected') is True
+        except ValueError:
+            # A running pre-update host may not have health yet. Its authenticated
+            # list response still proves connectivity until Harness is restarted.
+            try:return self.call('list',timeout=1.5).get('connected') is True
+            except (BridgeUnavailable,ValueError):return False
+        except BridgeUnavailable:return False
+
+    def call(self, action, sid=None, body=None, timeout=30):
         try:
             port=json.loads(self.endpoint.read_text('utf-8'))['port']
             if not isinstance(port,int) or not 1<=port<=65535:raise ValueError()
@@ -47,7 +62,7 @@ class DeepSeek:
             request=urllib.request.Request(f'http://127.0.0.1:{port}/mobile',data=payload,headers={'Authorization':'Bearer '+self.token,'Content-Type':'application/json'})
             # Local adapter traffic must never pass through system HTTP proxies.
             opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
-            with opener.open(request,timeout=30) as response:
+            with opener.open(request,timeout=timeout) as response:
                 raw=response.read(32*1024*1024+1)
                 if len(raw)>32*1024*1024:raise ValueError('DeepSeek 会话过大')
                 result=json.loads(raw)

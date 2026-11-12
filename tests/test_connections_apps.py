@@ -194,7 +194,8 @@ class ApplicationTests(unittest.TestCase):
     def test_assistant_window_remains_remotely_reopenable(self):
         with tempfile.TemporaryDirectory() as d:
             app=self.app(d);self.assertTrue(app.execute('assistant','stop',True)['background']);self.assertFalse(app.window_open)
-            app.execute('assistant','start');self.assertTrue(app.window_open);app.window.assert_called_with(True);app.close()
+            with self.assertRaises(ValueError):app.execute('assistant','start')
+            app.execute('assistant','restart',True);self.assertTrue(app.window_open);app.window.assert_called_with(True);app.close()
     def test_claude_launch_arguments_and_restart_path(self):
         row={'ProcessId':42,'ExecutablePath':'C:/exact/Claude.exe','CommandLine':'Claude.exe'}
         with tempfile.TemporaryDirectory() as d,patch('coding_remote.apps.main_processes',side_effect=[[row],[]]),patch('coding_remote.apps.close_process') as close,patch('coding_remote.apps.subprocess.Popen') as launch,patch('coding_remote.apps.executable') as lookup:
@@ -227,8 +228,11 @@ class ApplicationTests(unittest.TestCase):
             app.inject();app.inject();inject.assert_not_called();self.close_tools.assert_called_once_with(42,Path(d));app.on_connected.assert_called_once();app.close()
     def test_no_receipt_does_not_close_tools_or_minimize(self):
         row={'ProcessId':42,'ExecutablePath':'C:/Claude.exe'}
-        with tempfile.TemporaryDirectory() as d,patch('coding_remote.apps.main_processes',return_value=[row]),patch('coding_remote.apps.keyboard.inject'),patch('coding_remote.apps.time.monotonic',side_effect=[0,0,20]):
+        with tempfile.TemporaryDirectory() as d,patch('coding_remote.apps.main_processes',return_value=[row]),patch('coding_remote.apps.keyboard.inject'),patch('coding_remote.apps.time.monotonic',return_value=0) as clock:
             app=self.app(d);app.desktop=types.SimpleNamespace(connected=False,disconnected=MagicMock());app.on_connected=MagicMock()
+            app.inject();clock.return_value=20;app.inject()
+            self.assertIn('初始化',app.error)
+            clock.return_value=181
             with self.assertRaisesRegex(RuntimeError,'连接回执'):app.inject()
             self.close_tools.assert_not_called();app.on_connected.assert_not_called();app.close()
     def test_tools_close_failure_preserves_connection_and_diagnostic_window(self):

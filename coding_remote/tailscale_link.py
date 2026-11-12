@@ -24,14 +24,14 @@ class TailscaleLink:
         result = self.run([self.cli, *args], capture_output=True, text=True, encoding='utf-8',
                           errors='replace', timeout=25, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         if result.returncode:
-            raise RuntimeError((result.stderr or result.stdout or 'Tailscale 连接失败').strip()[:900])
+            raise RuntimeError((result.stderr or result.stdout or '永久连接 连接失败').strip()[:900])
         return result.stdout
 
     def start(self):
         state=json.loads(self.command('status','--json'))
-        if state.get('BackendState')!='Running':raise RuntimeError('已安装的 Tailscale 尚未连接；可连接 Tailscale，或在设置使用内置网络。临时扫码连接仍可使用。')
+        if state.get('BackendState')!='Running':raise RuntimeError('已安装的 永久连接 尚未连接；可连接 永久连接，或在设置使用内置网络。临时连接仍可使用。')
         addresses=[a for a in state.get('TailscaleIPs',[]) if ':' not in a and ipaddress.ip_address(a) in ipaddress.ip_network('100.64.0.0/10')]
-        if not addresses:raise RuntimeError('未找到 Tailscale 设备地址，请检查登录状态。')
+        if not addresses:raise RuntimeError('未找到 永久连接 设备地址，请检查登录状态。')
         address=addresses[0]
         try:saved=json.loads(self.path.read_text('utf-8'))
         except (OSError,ValueError):saved={}
@@ -57,7 +57,7 @@ class TailscaleLink:
             if not isinstance(port,int) or not 1024<=port<=65535:continue
             try:self.proxy=Server((address,port),Proxy);break
             except OSError:continue
-        if self.proxy is None:raise RuntimeError('Tailscale 地址暂不可用或绑定端口已占用。请退出旧版助手，保持原端口后重试。')
+        if self.proxy is None:raise RuntimeError('永久连接 地址暂不可用或绑定端口已占用。请退出旧版助手，保持原端口后重试。')
         origin=f'http://{address}:{self.proxy.server_address[1]}'
         self.allow_origin(origin)
         threading.Thread(target=self.proxy.serve_forever,daemon=True).start()

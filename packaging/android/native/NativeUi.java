@@ -10,12 +10,16 @@ import android.widget.*;
 
 /** Shared visual language, including density-independent line icons. */
 final class NativeUi {
+    static String visualStyle="classic";
+    static String colorStyle="catppuccin";
+    static String fontFamily="sans-serif";
     static int INK=0xff242b27, MUTED=0xff5b625d, GREEN=0xff27634d;
     static int CANVAS=0xfff6f7f2, WHITE=0xffffffff, LINE=0xffe5e8e1;
     static int EDGE=0xffccd2c8;
     static int TINT=0xffeaf1e9, SOFT=0xfff2f4ef, RED=0xffa4453e;
     /** Secondary accent: every theme is a scheme, not a single colour. */
     static int ACCENT=0xff305d77;
+    static int RUN=0xff10776a, WAIT=0xff9a6210, WAIT_BG=0xfffbf3e4;
     static int DIFF_ADD=0xffdceee0,DIFF_REMOVE=0xfff8e3df;
     /** Foregrounds for the diff rows, solved against the washes above rather than
      * reusing the primary and the danger colour, which only cleared 4.0-4.5:1. */
@@ -28,12 +32,12 @@ final class NativeUi {
      * one sp that read as sloppiness rather than hierarchy. Six steps, one meaning
      * each; anything that needs a size picks the nearest role instead of a number.
      */
-    static final int CAPTION=11;   // metadata, counters, tab labels
-    static final int LABEL=13;     // secondary row text, section headers
-    static final int BODY=15;      // message text, primary list rows
+    static final int CAPTION=12;   // values and compact tags
+    static final int LABEL=13;     // supporting text
+    static final int BODY=16;      // conversation text
     static final int TITLE=17;     // card and group headings
-    static final int HEADING=24;   // page titles
-    static final int DISPLAY=34;   // the welcome screen only
+    static final int HEADING=22;   // page titles
+    static final int DISPLAY=30;   // the welcome screen only
     /** The only touch target size; 44dp appears throughout the old layout and is
      * below the 48dp minimum. */
     static final int TOUCH=48;
@@ -67,7 +71,7 @@ final class NativeUi {
      * also sit above the header, and a modal above both.
      */
     static final int LIFT_FLAT=0;       // inline content, no shadow
-    static final int LIFT_HEADER=2;     // page and conversation headers
+    static final int LIFT_HEADER=0;     // page and conversation headers
     static final int LIFT_FLOATING=3;   // the floating navigation handle
     static final int LIFT_POPUP=5;      // menus and drop-downs
     static final int LIFT_DIALOG=10;    // sheets and dialogs
@@ -79,9 +83,9 @@ final class NativeUi {
      * rows of the same list reads as a mistake, not as hierarchy. Four steps, each
      * tied to the size of the thing being rounded.
      */
-    static final int CORNER_CHIP=10;    // swatches, inline tags, small toggles
-    static final int CORNER_ROW=14;     // list rows, buttons, fields
-    static final int CORNER_CARD=18;    // grouped cards, panels
+    static final int CORNER_CHIP=8;    // swatches, inline tags, small toggles
+    static final int CORNER_ROW=12;     // list rows, buttons, fields
+    static final int CORNER_CARD=14;    // grouped cards, panels
     static final int CORNER_SHEET=24;   // sheets and full-width surfaces
     /** Half of the 46dp floating-navigation button. A radius equal to half the side is
      *  what makes it a disc rather than a rounded square, which is why it is its own
@@ -93,197 +97,70 @@ final class NativeUi {
     static final int SPACE_TIGHT=4;     // between a label and its value
     static final int SPACE_INLINE=8;    // between siblings inside a row
     static final int SPACE_STACK=12;    // between stacked rows in one card
-    static final int SPACE_GROUP=22;    // between two cards
+    static final int SPACE_GROUP=24;    // between two cards
     static final int SPACE_PAGE=16;     // page gutter, left and right
-    /**
-     * A theme is a colour style, not a pile of overrides.
-     *
-     * Each entry describes one style by hue, mode and saturation. Surfaces, edges,
-     * the code palette, the diff washes and the semantic colours are all derived
-     * from those numbers, so a style cannot come out half-applied and "the colours
-     * that are not the theme" stay in the same family as the ones that are.
-     */
-    private static final class Scheme {
-        final int hue;        // anchor hue, degrees
-        final boolean dark;   // mode, not a style choice
-        final float chroma;   // how much of the hue reaches the surfaces, 0..1
-        final float warmth;   // hue drift for the warm accents, degrees
-        Scheme(int hue,boolean dark,float chroma,float warmth){
-            this.hue=hue;this.dark=dark;this.chroma=chroma;this.warmth=warmth;
+    /** One complete visual system with explicit day/night roles. Old colour
+     * preferences migrate once; appearance remains an independent user choice. */
+    static void theme(Context context){
+        android.content.SharedPreferences p=context.getSharedPreferences("ui",0);
+        if(p.contains("theme")){
+            String legacy=p.getString("theme","light");
+            android.content.SharedPreferences.Editor edit=p.edit().remove("theme");
+            if(!p.contains("appearance"))edit.putString("appearance",legacy.equals("dark")||legacy.equals("midnight")?"dark":"system");
+            edit.commit();
         }
+        String mode=p.getString("appearance","system");
+        boolean night=mode.equals("dark")||(mode.equals("system")&&(context.getResources().getConfiguration().uiMode&0x30)==0x20);
+        theme(night?"dark":"light");
+        colorStyle=p.getString("colorStyle","catppuccin");
+        if(!colorStyle.equals("catppuccin")&&!colorStyle.equals("tokyo")&&!colorStyle.equals("everforest"))colorStyle="catppuccin";
+        p.edit().putString("colorStyle",colorStyle).remove("visualStyle").apply();
+        palette(colorStyle,night);
+        fontFamily=p.getString("fontFamily","sans-serif");
+        if(!fontFamily.equals("serif")&&!fontFamily.equals("sans-serif-condensed")&&!fontFamily.equals("monospace"))fontFamily="sans-serif";
     }
-    static final String[] THEMES={"light","green","ocean","lavender","sand","dark","midnight"};
-    /** Style names in the same order as THEMES.
-     *
-     * The list used to be one entry out of step past the first: 墨绿 named the neutral
-     * dark style and 新叶 the light green one, so picking "墨绿" produced a grey-black
-     * screen and picking "新叶" a pale one. A name is a promise about the colour. */
-    static final String[] THEME_NAMES={"素白","新叶","远洋","紫藤","暖沙","墨绿","午夜"};
-    private static Scheme scheme(String name){
-        if(name.equals("dark"))     return new Scheme(150,true, .30f, 0f);
-        if(name.equals("green"))    return new Scheme(150,false,.30f, 0f);
-        if(name.equals("ocean"))    return new Scheme(205,false,.34f, 8f);
-        if(name.equals("lavender")) return new Scheme(272,false,.28f,16f);
-        if(name.equals("sand"))     return new Scheme( 34,false,.30f,-8f);
-        if(name.equals("midnight")) return new Scheme(222,true, .36f,12f);
-        return new Scheme(150,false,.22f, 0f);   // light: the neutral default
-    }
-    /**
-     * The light-theme surface ladder: saturation and lightness per theme, ten values
-     * each, in the order canvas S/L, card S/L, field S/L, tint S/L, line S/L.
-     *
-     * These are spelled out rather than derived from a chroma multiplier because that
-     * derivation is what collapsed the surfaces together: one small multiplier applied
-     * to a hue gives every theme the same near-white, and the schema had no way to say
-     * "this theme's canvas is a definite mint and that one's is a definite sand".
-     *
-     * The canvases carry real chroma and sit lower on the lightness scale than they used
-     * to. At .955-.975 with saturation under .4 every one of these rendered as the same
-     * off-white, so switching themes changed the accent and nothing else - which is what
-     * "the colours are still not obvious" was. The card stays the brightest surface in
-     * every row so the ladder (canvas < card) still reads as depth.
-     *
-     * `light` is deliberately the least saturated entry so it stays the no-opinion
-     * choice. The rest carry their hue on the canvas, which is the thing the reader
-     * actually sees when they pick a theme.
-     */
-    private static final float[][] LIGHT_SURFACES={
-        //                canvas          card            field           tint            line
-        /* light    */ {.030f,.975f, .010f,.998f, .060f,.905f, .055f,.930f, .040f,.870f},
-        /* green    */ {.420f,.930f, .100f,.993f, .430f,.868f, .470f,.902f, .380f,.812f},
-        /* ocean    */ {.400f,.934f, .090f,.993f, .410f,.872f, .450f,.906f, .360f,.816f},
-        /* lavender */ {.340f,.936f, .080f,.994f, .350f,.874f, .390f,.908f, .300f,.818f},
-        /* sand     */ {.480f,.926f, .110f,.992f, .500f,.862f, .540f,.898f, .440f,.806f},
-        /* dark     */ {.030f,.975f, .010f,.998f, .060f,.905f, .055f,.930f, .040f,.870f},
-        /* midnight */ {.160f,.960f, .040f,.996f, .180f,.892f, .210f,.920f, .120f,.850f},
-    };
-    private static float ladder(String name,int slot){
-        int row=java.util.Arrays.asList(THEMES).indexOf(name);
-        if(row<0)row=0;
-        return LIGHT_SURFACES[row][slot];
-    }
-
-    static void theme(String name){
-        Scheme s=scheme(name);
-        float c=s.chroma;
-        int drift=Math.round(s.warmth);
-
-        // Surfaces. A light style is a tinted canvas with a lighter card on it; a dark
-        // one inverts that, with the canvas deeper than the card above it.
-        //
-        // These were previously all within 0.03 lightness of each other - canvas .982,
-        // field .950, card .910 - with saturation multiplied down to .03-.04. Three
-        // surfaces that close together cannot be told apart whatever hue they carry, so
-        // an input field on the page measured 1.07:1 and read as transparent, and five
-        // of the seven themes had visibly identical canvases. The ladder below is
-        // separated by lightness first and tinted second, which is what makes the field
-        // a control and each theme its own colour.
-        CANVAS= s.dark?hsl(s.hue,c*.90f,.088f):hsl(s.hue,ladder(name,0),ladder(name,1));
-        WHITE = s.dark?hsl(s.hue,c*.80f,.152f):hsl(s.hue,ladder(name,2),ladder(name,3));
-        SOFT  = s.dark?hsl(s.hue,c*.95f,.205f):hsl(s.hue,ladder(name,4),ladder(name,5));
-        // The card sits above the canvas on light themes and above it on dark ones too,
-        // but by less: a card is a grouping, not a control.
-        TINT  = s.dark?hsl(s.hue,c*1.10f,.245f):hsl(s.hue,ladder(name,6),ladder(name,7));
-        LINE  = s.dark?hsl(s.hue,c*.70f,.260f):hsl(s.hue,ladder(name,8),ladder(name,9));
-
-        // Everything below is placed by the contrast it needs, not by a lightness
-        // picked by eye. Hand-chosen values were the reason EDGE measured 1.8-2.2:1
-        // against its own field on every theme, and why a cold style kept a warm
-        // emphasis amber: the constraint was never written down, so it was never
-        // met. solve() walks away from the surface until the floor is reached.
-
-        // A visible edge for input surfaces: 3:1 is what identifies a control.
-        EDGE  = solve(s.hue,s.dark?c*.30f:c*.24f,SOFT,3.0f,!s.dark);
-
-        // Text. These are read against the surfaces they actually land on, which is why
-        // they are solved rather than picked. A dark label loses contrast on a dark
-        // surface, so on light themes the label is solved against whichever of the card
-        // and the field is darker; on dark themes the surfaces invert and the lighter
-        // one is the harder case.
-        int busiest=s.dark?(Color.luminance(SOFT)>=Color.luminance(TINT)?SOFT:TINT)
-                          :(Color.luminance(SOFT)<=Color.luminance(TINT)?SOFT:TINT);
-        INK  = solve(s.hue,c*.12f,busiest,9.0f,!s.dark);
-        MUTED= solve(s.hue,c*.10f,busiest,4.5f,!s.dark);
-
-        // The primary carries onPrimary() labels, so it is solved against its own
-        // fill and the label colour is then derived from it.
-        GREEN= s.dark?hsl(s.hue,c*.60f,.750f):hsl(s.hue,Math.min(1f,c*1.9f),.300f);
-
-        // Secondary and semantic. ACCENT takes a turn away from the primary: far
-        // enough to read as a second colour, close enough to stay in the family.
-        ACCENT  = solve(s.hue+40,s.dark?c*.48f:c*.70f,WHITE,4.5f,!s.dark);
-        RED     = solve( 8+drift,.46f,WHITE,4.5f,!s.dark);
-        EMPHASIS= solve(38+drift,.60f,WHITE,4.5f,!s.dark);
-
-        // Code palette: hue offsets from the anchor, so highlights belong to the
-        // style instead of arriving as a fixed purple and green.
-        CODE   = solve(s.hue+16,c*.68f,WHITE,4.5f,!s.dark);
-        KEYWORD= solve(s.hue+104,c*.60f,WHITE,4.5f,!s.dark);
-        STRING = solve(s.hue-72,c*.58f,WHITE,4.5f,!s.dark);
-
-        // Diff washes first - they are the surfaces - then the two foregrounds
-        // solved against them, so an added line is legible on every style.
-        DIFF_ADD   = s.dark?hsl(s.hue-60,c*.44f,.190f):hsl(s.hue-66,c*.40f,.925f);
-        DIFF_REMOVE= s.dark?hsl(10+drift,.32f,.195f):hsl(10+drift,.42f,.935f);
-        DIFF_ADD_TEXT   = solve(s.hue-72,c*.58f,DIFF_ADD,4.5f,!s.dark);
-        DIFF_REMOVE_TEXT= solve( 8+drift,.46f,DIFF_REMOVE,4.5f,!s.dark);
-    }
-    /** HSL with the degrees wrapped, so callers can just add offsets. */
-    private static int hsl(int hue,float saturation,float lightness){
-        float h=(((hue%360)+360)%360)/360f;
-        float sat=Math.max(0f,Math.min(1f,saturation)),lum=Math.max(0f,Math.min(1f,lightness));
-        float q=lum<.5f?lum*(1+sat):lum+sat-lum*sat;
-        float p=2*lum-q;
-        return 0xff000000
-            |(Math.round(channel(p,q,h+1f/3f)*255f)<<16)
-            |(Math.round(channel(p,q,h)*255f)<<8)
-            | Math.round(channel(p,q,h-1f/3f)*255f);
-    }
-    private static float channel(float p,float q,float t){
-        if(t<0f)t+=1f;
-        if(t>1f)t-=1f;
-        if(t<1f/6f)return p+(q-p)*6f*t;
-        if(t<1f/2f)return q;
-        if(t<2f/3f)return p+(q-p)*(2f/3f-t)*6f;
-        return p;
-    }
-    /**
-     * The closest colour to {@code surface} on the requested side that reaches
-     * {@code floor} of contrast against it.
-     *
-     * Solving beats choosing: the requirement is stated once, holds for every
-     * style, and survives a change to the saturation or the surface tone. The walk
-     * starts at the surface's own lightness, so the result stays as close to the
-     * surface as legibility allows instead of drifting to pure black or white.
-     */
-    private static int solve(int hue,float saturation,int surface,float floor,boolean darker){
-        float base=0f,lo=0f,hi=1f;
-        // Locate the surface's lightness on this hue/saturation axis by bisection.
-        for(int i=0;i<48;i++){
-            float mid=(lo+hi)/2f;
-            if(Color.luminance(hsl(hue,saturation,mid))<Color.luminance(surface))lo=mid;else hi=mid;
+    static void theme(String mode){palette("catppuccin",mode.equals("dark"));}
+    /** Palette references and role mapping: docs/mobile-palettes.md. */
+    static void palette(String scheme,boolean night){
+        visualStyle="classic";colorStyle=scheme;
+        if(scheme.equals("tokyo")){
+            CANVAS=night?0xff1a1b26:0xffe1e2e7;WHITE=night?0xff24283b:0xfff4f4f8;SOFT=night?0xff292e42:0xffd5d6db;
+            LINE=night?0xff3b4261:0xffc4c8da;EDGE=night?0xff737aa2:0xff7e849e;
+            INK=night?0xffc0caf5:0xff343b58;MUTED=night?0xffa9b1d6:0xff565f89;
+            GREEN=night?0xff7aa2f7:0xff34548a;ACCENT=night?0xff73daca:0xff166775;TINT=night?0xff283457:0xffdce3f4;
+            RUN=night?0xff73daca:0xff226754;WAIT=night?0xffe0af68:0xff805514;WAIT_BG=night?0xff383027:0xfff2e8d4;
+            RED=night?0xfff7768e:0xffa42e4d;CODE=night?0xff7dcfff:0xff0f6177;KEYWORD=night?0xffbb9af7:0xff65359d;
+            STRING=night?0xff9ece6a:0xff365b19;EMPHASIS=night?0xffff9e64:0xff8a430e;
+            DIFF_ADD=night?0xff263b38:0xffdcebdc;DIFF_REMOVE=night?0xff442b3b:0xfff1dce1;
+        }else if(scheme.equals("everforest")){
+            CANVAS=night?0xff232a2e:0xfff2efdf;WHITE=night?0xff2d353b:0xfffffbef;SOFT=night?0xff343f44:0xfff8f5e4;
+            LINE=night?0xff475258:0xffdedccb;EDGE=night?0xff859289:0xff829181;
+            INK=night?0xffd3c6aa:0xff3f4e56;MUTED=night?0xff9da9a0:0xff5c6a72;
+            GREEN=night?0xffa7c080:0xff526516;ACCENT=night?0xff7fbbb3:0xff286487;TINT=night?0xff425047:0xffeaedc8;
+            RUN=night?0xff83c092:0xff247153;WAIT=night?0xffdbbc7f:0xff806014;WAIT_BG=night?0xff4d4c43:0xfffef2d5;
+            RED=night?0xffe67e80:0xffa33136;CODE=night?0xff7fbbb3:0xff286487;KEYWORD=night?0xffd699b6:0xff913b75;
+            STRING=night?0xffa7c080:0xff526516;EMPHASIS=night?0xffe69875:0xff904610;
+            DIFF_ADD=night?0xff425047:0xfff0f1d2;DIFF_REMOVE=night?0xff514045:0xfffde3da;
+        }else{
+            colorStyle="catppuccin";
+            CANVAS=night?0xff181825:0xffe6e9ef;WHITE=night?0xff1e1e2e:0xffeff1f5;SOFT=night?0xff313244:0xffdce0e8;
+            LINE=night?0xff45475a:0xffccd0da;EDGE=night?0xff7f849c:0xff7c7f93;
+            INK=night?0xffcdd6f4:0xff4c4f69;MUTED=night?0xffa6adc8:0xff5c5f77;
+            GREEN=night?0xffcba6f7:0xff8839ef;ACCENT=night?0xff89b4fa:0xff1e66f5;TINT=night?0xff3e3054:0xffe5daf5;
+            RUN=night?0xff94e2d5:0xff147176;WAIT=night?0xfff9e2af:0xff86520d;WAIT_BG=night?0xff423a30:0xfff4e6ce;
+            RED=night?0xfff38ba8:0xffb90d33;CODE=night?0xff89b4fa:0xff1e57c7;KEYWORD=night?0xffcba6f7:0xff7832d4;
+            STRING=night?0xffa6e3a1:0xff2b731d;EMPHASIS=night?0xfffab387:0xffa94709;
+            DIFF_ADD=night?0xff2d4235:0xffdfead9;DIFF_REMOVE=night?0xff493040:0xfff3dce3;
         }
-        base=(lo+hi)/2f;
-        int best=surface;
-        for(int i=0;i<=400;i++){
-            float t=i/400f;
-            float lightness=darker?base-base*t:base+(1f-base)*t;
-            int value=hsl(hue,saturation,lightness);
-            if(contrast(value,surface)>=floor)return value;
-            best=value;
-        }
-        return best;
+        // Some upstream light accents target syntax on editor backgrounds, not
+        // small mobile labels. Keep the hue while meeting the text contrast floor.
+        INK=readable(INK,WHITE);MUTED=readable(readable(MUTED,WHITE),CANVAS);
+        GREEN=readable(GREEN,WHITE);ACCENT=readable(ACCENT,WHITE);
+        CODE=readable(CODE,SOFT);KEYWORD=readable(KEYWORD,SOFT);STRING=readable(STRING,SOFT);EMPHASIS=readable(EMPHASIS,SOFT);
+        RUN=readable(RUN,WHITE);RED=readable(RED,WHITE);WAIT=readable(WAIT,WAIT_BG);
+        DIFF_ADD_TEXT=readable(STRING,DIFF_ADD);DIFF_REMOVE_TEXT=readable(RED,DIFF_REMOVE);
     }
-    /** Canvas, primary and secondary colours of a theme, for the settings preview. */
-    static int[] preview(String name){
-        int[] saved={INK,MUTED,GREEN,CANVAS,WHITE,LINE,TINT,SOFT,RED,DIFF_ADD,DIFF_REMOVE,CODE,KEYWORD,STRING,EMPHASIS,EDGE,ACCENT,DIFF_ADD_TEXT,DIFF_REMOVE_TEXT};
-        theme(name);
-        int[] result={CANVAS,GREEN,ACCENT};
-        INK=saved[0];MUTED=saved[1];GREEN=saved[2];CANVAS=saved[3];WHITE=saved[4];LINE=saved[5];TINT=saved[6];SOFT=saved[7];RED=saved[8];
-        DIFF_ADD=saved[9];DIFF_REMOVE=saved[10];CODE=saved[11];KEYWORD=saved[12];STRING=saved[13];EMPHASIS=saved[14];EDGE=saved[15];ACCENT=saved[16];
-        DIFF_ADD_TEXT=saved[17];DIFF_REMOVE_TEXT=saved[18];
-        return result;
-    }
+    private static int readable(int foreground,int background){return 0xff000000|towardExtreme(background,foreground,4.5f);}
     /** Label colour that stays readable on the accent fill of the current theme.
      *
      * The test has to look at GREEN, the colour actually painted behind the label:
@@ -302,13 +179,8 @@ final class NativeUi {
         int ink=INK & 0x00ffffff;
         return Color.luminance(CANVAS)<.2?blend(MUTED,ink,.22f):blend(MUTED,ink,.28f);
     }
-    /** Hairline divider for a given surface. LINE alone is nearly invisible against
-     * the canvas on every theme, so pull it toward the ink: light surfaces need a
-     * slightly stronger stroke than dark ones to read as the same weight. */
-    static int rule(int surface){
-        int ink=INK & 0x00ffffff;
-        return Color.luminance(surface)<.2?blend(LINE,ink,.30f):blend(LINE,ink,.50f);
-    }
+    /** Decorative separators use the shared prototype line token. */
+    static int rule(int surface){return LINE;}
     /** Context-ring colours, solved against the accent fill the ring sits on.
      *
      * These were fixed black/white/amber values tuned on the light themes. The track was
@@ -368,6 +240,15 @@ final class NativeUi {
     }
     private final Context context;
     NativeUi(Context c){context=c;}
+    ImageView providerIcon(String key,int size){
+        ImageView view=new ImageView(context);view.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        int resource=res(key+"_official","drawable",0);
+        if(resource!=0)view.setImageResource(resource);
+        else view.setImageDrawable(new Symbol(key.equals("claude")?"spark":"chat",INK,dp(size)));
+        // The black Codex mark needs a light backing in dark mode as well.
+        view.setPadding(dp(2),dp(2),dp(2),dp(2));view.setBackground(surface(Color.WHITE,6,false));
+        view.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);return view;
+    }
     /** Resolve a resource name without ever returning 0.
      *
      * getIdentifier() answers 0 for a name the installed package does not carry,
@@ -385,8 +266,19 @@ final class NativeUi {
     }
     int dp(float x){return Math.round(context.getResources().getDisplayMetrics().density*x);}
     static int dp(Context context,float x){return Math.round(context.getResources().getDisplayMetrics().density*x);}
+    GradientDrawable backdrop(){
+        boolean dark=Color.luminance(CANVAS)<.2;
+        return new GradientDrawable(GradientDrawable.Orientation.TL_BR,new int[]{CANVAS,CANVAS});
+    }
+    void sheetHeader(LinearLayout box,String title,Runnable close){
+        LinearLayout row=new LinearLayout(context);row.setGravity(Gravity.CENTER_VERTICAL);
+        TextView label=text(title,HEADING,INK);emphasize(label);row.addView(label,new LinearLayout.LayoutParams(0,dp(48),1));
+        Button dismiss=iconButton("close","关闭");dismiss.setOnClickListener(v->close.run());row.addView(dismiss,new LinearLayout.LayoutParams(dp(48),dp(48)));box.addView(row);
+    }
     GradientDrawable surface(int color,int radius,boolean border){
-        GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(radius));
+        GradientDrawable d=new GradientDrawable();d.setColor(color);
+        int adjusted=radius;
+        d.setCornerRadius(dp(adjusted));
         if(border)d.setStroke(dp(1),LINE);
         return d;
     }
@@ -432,8 +324,26 @@ final class NativeUi {
         return states;
     }
     TextView text(String label,int size,int color){
-        TextView v=new TextView(context);v.setText(label);v.setTextSize(size);v.setTextColor(color);
-        v.setFontFeatureSettings("kern");v.setIncludeFontPadding(false);v.setLineSpacing(dp(4),1);return v;
+        return styleText(new TextView(context),label,size,color);
+    }
+    TextView sessionTitle(){
+        TextView view=new TextView(context){
+            @Override protected void onMeasure(int widthSpec,int heightSpec){
+                super.onMeasure(widthSpec,heightSpec);
+                int lines=Math.max(1,Math.min(2,getLineCount()));
+                int height=Math.round(getLineHeight()*(lines+.5f));
+                setMeasuredDimension(getMeasuredWidth(),resolveSize(height,heightSpec));
+            }
+        };
+        return styleText(view,"",15,INK);
+    }
+    private TextView styleText(TextView v,String label,int size,int color){
+        v.setText(label);v.setTextSize(size);v.setTextColor(color);
+        v.setTypeface(Typeface.create(fontFamily,Typeface.NORMAL));v.setFontFeatureSettings("kern");v.setIncludeFontPadding(false);v.setLineSpacing(dp(4),1);return v;
+    }
+    Button rowAction(String label,String icon){
+        Button button=button(label,false);button.setTextSize(LABEL);button.setBackground(touch(Color.TRANSPARENT,0,false));
+        button.setPadding(dp(8),0,dp(8),0);leading(button,icon,MUTED,18);return button;
     }
     Button button(String label,boolean primary){
         Button b=new Button(context);b.setText(label);b.setAllCaps(false);b.setTextSize(NativeUi.LABEL);
@@ -444,7 +354,7 @@ final class NativeUi {
         int enabled=primary?onPrimary():INK;
         b.setTextColor(new ColorStateList(new int[][]{new int[]{-android.R.attr.state_enabled},new int[]{}},
             new int[]{disabledText(primary?GREEN:SOFT,enabled),enabled}));
-        b.setBackground(touchEnabled(primary?GREEN:SOFT,14));b.setStateListAnimator(null);
+        b.setBackground(touchEnabled(primary?GREEN:SOFT,CORNER_ROW));b.setStateListAnimator(null);
         b.setMinHeight(dp(48));b.setMinimumHeight(dp(48));b.setMinWidth(0);b.setMinimumWidth(0);b.setPadding(dp(14),dp(8),dp(14),dp(8));return b;
     }
     /** Label colour for a disabled button: a dimmed form of the enabled label.
@@ -496,8 +406,8 @@ final class NativeUi {
      * Emphasis here means "the medium family", which stays legible at the caption
      * sizes used for section labels; BOLD is reserved for a value read at a glance.
      */
-    static void emphasize(TextView view){view.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));}
-    static void strong(TextView view){view.setTypeface(Typeface.DEFAULT,Typeface.BOLD);}
+    static void emphasize(TextView view){view.setTypeface(fontFamily.equals("sans-serif")?Typeface.create("sans-serif-medium",Typeface.NORMAL):Typeface.create(fontFamily,Typeface.BOLD));}
+    static void strong(TextView view){view.setTypeface(Typeface.create(fontFamily,Typeface.BOLD));}
     static void monospace(TextView view){view.setTypeface(Typeface.MONOSPACE);}
     /** Monospace at bold weight, for the single-letter change badges. */
     static void monospaceStrong(TextView view){view.setTypeface(Typeface.MONOSPACE,Typeface.BOLD);}
@@ -519,12 +429,15 @@ final class NativeUi {
         public View getView(int p,View old,ViewGroup parent){TextView label=old instanceof TextView?(TextView)old:text("",NativeUi.BODY,INK);label.setText(getItem(p));label.setTextColor(INK);label.setMinHeight(dp(52));label.setGravity(Gravity.CENTER_VERTICAL);label.setPadding(dp(14),dp(10),dp(14),dp(10));label.setMaxLines(2);label.setEllipsize(android.text.TextUtils.TruncateAt.END);label.setBackground(touch(Color.TRANSPARENT,CORNER_ROW,false));label.setCompoundDrawables(null,null,parent instanceof Spinner?new Symbol("down",MUTED,dp(16)):null,null);label.setCompoundDrawablePadding(dp(8));return label;}
         public View getDropDownView(int p,View old,ViewGroup parent){return getView(p,old,parent);}
     };}
-    Spinner spinner(String[] values){Spinner v=new Spinner(context,Spinner.MODE_DROPDOWN);v.setAdapter(choices(java.util.Arrays.asList(values)));v.setBackground(touch(SOFT,CORNER_ROW,true));v.setPopupBackgroundDrawable(surface(WHITE,CORNER_CARD,true));v.setPadding(dp(4),0,dp(12),0);return v;}
-    void reveal(View view,boolean upward){view.animate().cancel();view.animate().withEndAction(null);view.setVisibility(View.VISIBLE);view.setAlpha(0);view.setTranslationY(dp(upward?10:-6));view.animate().alpha(1).translationY(0).setDuration(180).setInterpolator(new android.view.animation.DecelerateInterpolator()).start();}
+    Spinner spinner(String[] values){Spinner v=new Spinner(context,Spinner.MODE_DIALOG){
+        @Override public boolean performClick(){SpinnerAdapter adapter=getAdapter();if(adapter==null)return false;String[] labels=new String[adapter.getCount()];for(int i=0;i<labels.length;i++)labels[i]=String.valueOf(adapter.getItem(i));
+            new NativeDialogBuilder(context,NativeUi.this).setTitle(getContentDescription()==null?"请选择":getContentDescription()).setSingleChoiceItems(labels,getSelectedItemPosition(),(dialog,index)->{setSelection(index);dialog.dismiss();}).setNegativeButton("取消",null).show();return true;}
+    };v.setAdapter(choices(java.util.Arrays.asList(values)));v.setBackground(touch(SOFT,CORNER_ROW,true));v.setPadding(dp(4),0,dp(12),0);return v;}
+    void reveal(View view,boolean upward){view.animate().cancel();view.setVisibility(View.VISIBLE);view.setAlpha(1);view.setTranslationY(0);}
     void window(Window window,boolean sheet){window.setBackgroundDrawableResource(android.R.color.transparent);window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
         // A dark canvas is already low-luminance, so the same scrim that separates a
         // sheet from a white background swallows the dark one entirely.
-        window.setDimAmount(Color.luminance(CANVAS)<.2?.46f:.32f);window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);int width=Math.min(dp(560),context.getResources().getDisplayMetrics().widthPixels-dp(24));window.setLayout(width,-2);if(sheet)window.setGravity(Gravity.BOTTOM|Gravity.CENTER_HORIZONTAL);WindowManager.LayoutParams attributes=window.getAttributes();if(sheet)attributes.y=dp(12);attributes.windowAnimations=style(sheet?"SheetMotion":"DialogMotion",0);window.setAttributes(attributes);}
+        window.setDimAmount(Color.luminance(CANVAS)<.2?.46f:.32f);window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);int width=Math.min(dp(560),context.getResources().getDisplayMetrics().widthPixels-dp(24));window.setLayout(width,-2);window.setGravity(Gravity.CENTER);WindowManager.LayoutParams attributes=window.getAttributes();attributes.x=0;attributes.y=0;attributes.windowAnimations=StatusSpine.reduced(context)?0:style("DialogMotion",0);window.setAttributes(attributes);}
 
     /** Keep transcript space available when approvals, a draft and the IME coexist. */
     static final class MenuScroll extends ScrollView {
@@ -597,10 +510,25 @@ final class NativeUi {
                 case "dot":p.setStyle(Paint.Style.FILL);c.drawCircle(12,12,4,p);break;
                 case "refresh":c.drawArc(4,4,20,20,40,295,false,p);line(c,20,3,20,9,14,9);break;
                 case "chat":box(c,3,4,21,18,4);line(c,7,18,6,22,12,18);line(c,8,9,16,9);line(c,8,13,13,13);break;
-                case "code":line(c,8,7,3,12,8,17);line(c,16,7,21,12,16,17);line(c,14,4,10,20);break;
+                case "code":case "terminal":box(c,2,4,22,20,2);line(c,6,9,10,12,6,15);line(c,13,16,18,16);break;
+                case "network":c.drawCircle(12,5,3,p);c.drawCircle(5,19,3,p);c.drawCircle(19,19,3,p);line(c,12,8,12,12,5,12,5,16);line(c,12,12,19,12,19,16);break;
+                case "home":line(c,2,11,12,3,22,11);line(c,5,9,5,21,19,21,19,9);line(c,10,21,10,14,14,14,14,21);break;
+                case "sleep":line(c,7,5,17,5,7,19,17,19);break;
+                case "steps":for(int i=0;i<3;i++){c.drawCircle(4,6+i*6,1,p);line(c,9,6+i*6,21,6+i*6);}break;
+                case "git":c.drawCircle(6,4,2,p);c.drawCircle(6,20,2,p);c.drawCircle(18,5,2,p);line(c,6,6,6,18);line(c,18,7,18,11,6,15);break;
+                case "bell":line(c,5,17,7,14,7,9);c.drawArc(7,4,17,14,180,180,false,p);line(c,17,9,17,14,19,17,5,17);c.drawArc(10,18,14,22,0,180,false,p);line(c,12,2,12,4);break;
+                case "unlink":c.drawArc(3,9,13,19,60,240,false,p);c.drawArc(11,5,21,15,240,240,false,p);line(c,3,3,21,21);break;
+                case "link":c.drawArc(3,9,13,19,45,270,false,p);c.drawArc(11,5,21,15,225,270,false,p);line(c,8,16,16,8);break;
+                case "power":c.drawArc(4,4,20,20,-45,270,false,p);line(c,12,2,12,11);break;
+                case "image":box(c,3,3,21,21,2);c.drawCircle(8,8,2,p);line(c,4,18,10,12,14,16,17,11,21,17);break;
                 case "settings":c.drawCircle(12,12,4,p);for(int i=0;i<8;i++){c.save();c.rotate(i*45,12,12);line(c,12,2,12,5);c.restore();}c.drawCircle(12,12,8,p);break;
                 case "scan":line(c,3,8,3,3,8,3);line(c,16,3,21,3,21,8);line(c,21,16,21,21,16,21);line(c,8,21,3,21,3,16);box(c,8,8,16,16,1);break;
                 case "copy":box(c,8,8,20,21,2);line(c,15,5,15,3,3,3,3,16,5,16);break;
+                case "more":p.setStyle(Paint.Style.FILL);for(int x=5;x<=19;x+=7)c.drawCircle(x,12,1.5f,p);break;
+                case "edit":line(c,4,16,4,20,8,20,20,8,16,4,4,16);line(c,13,7,17,11);break;
+                case "select":line(c,4,4,8,4);line(c,6,4,6,20);line(c,4,20,8,20);line(c,16,4,20,4);line(c,18,4,18,20);line(c,16,20,20,20);break;
+                case "share":c.drawCircle(5,12,2.5f,p);c.drawCircle(18,5,2.5f,p);c.drawCircle(18,19,2.5f,p);line(c,7,11,16,6);line(c,7,13,16,18);break;
+                case "filter":line(c,4,6,20,6);line(c,7,12,17,12);line(c,10,18,14,18);break;
                 case "shield":line(c,12,2,20,5,19,15,12,22,5,15,4,5,12,2);line(c,8,12,11,15,16,9);break;
                 case "stop":p.setStyle(Paint.Style.FILL);box(c,6,6,18,18,2);break;
                 case "spark":for(int i=0;i<8;i++){c.save();c.rotate(i*45,12,12);line(c,12,3,12,8);c.restore();}break;

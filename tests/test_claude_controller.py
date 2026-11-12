@@ -33,6 +33,20 @@ class FakeDesktop:
 
 
 class ClaudeControllerTests(unittest.TestCase):
+    def test_console_script_needs_no_token_and_keeps_unicode_paths_compact(self):
+        with tempfile.TemporaryDirectory() as folder:
+            controller = Controller(Path(folder) / '中文工作区' / '.coding-remote')
+            try:
+                script = controller.console_script
+                self.assertTrue(script.startswith('window.__claudeMobileBridge?.stop()'))
+                self.assertIn('中文工作区', script)
+                self.assertNotIn('\\u4e2d', script)
+                self.assertNotIn('__BRIDGE_CONFIG__', script)
+                self.assertFalse((controller.directory / 'desktop.json').exists())
+            finally:
+                controller.close()
+                controller.loop.close()
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.controller = Controller(Path(self.tmp.name) / '.coding-remote')
@@ -67,6 +81,58 @@ class ClaudeControllerTests(unittest.TestCase):
             self.dispatch('/sessions/' + sid + '/unsupported', 'POST', {'id': str(uuid.uuid4())})
         self.assertEqual(unknown.exception.status, 404)
         self.assertEqual(self.writes, [])
+
+    def test_edit_rewinds_before_send_and_duplicate_does_not_repeat(self):
+        from coding_remote.message_edit import draft
+        transcript=[{'uuid':'user-uuid','type':'user','message':{'role':'user','content':'Original'}}]
+        original=self.controller.desktop.call
+        self.controller.desktop.capabilities['code'].append('rewindV2')
+        async def call(kind,method,*args,**kwargs):
+            if method=='getTranscript':return transcript
+            if method=='rewindV2':self.writes.append((method,args));return {'prefill':'Original'}
+            return await original(kind,method,*args,**kwargs)
+        self.controller.desktop.call=call
+        sid=model.gateway_id('code','local_test')
+        detail=self.dispatch('/sessions/'+sid)
+        body={**draft(detail,'user-uuid:text:0'),'text':'Edited','confirmed':True,'id':str(uuid.uuid4())}
+        for _ in range(2):self.assertEqual(self.dispatch('/sessions/'+sid+'/edit','POST',body)['status'],'accepted')
+        self.assertEqual(self.writes,[('rewindV2',('local_test','user-uuid')),('sendMessage',('local_test','Edited'))])
+        transcript.append({'uuid':'later','type':'user','message':{'role':'user','content':'New message'}})
+        with self.assertRaises(ValueError):self.dispatch('/sessions/'+sid+'/edit','POST',{**body,'id':str(uuid.uuid4())})
+        self.assertEqual(len(self.writes),2)
+
+    def test_uncertain_rewind_never_sends_or_replays(self):
+        from coding_remote.message_edit import draft
+        original=self.controller.desktop.call
+        self.controller.desktop.capabilities['code'].append('rewindV2')
+        async def call(kind,method,*args,**kwargs):
+            if method=='getTranscript':return [{'uuid':'u','type':'user','message':{'role':'user','content':'Original'}}]
+            if method=='rewindV2':self.writes.append((method,args));return None
+            return await original(kind,method,*args,**kwargs)
+        self.controller.desktop.call=call;sid=model.gateway_id('code','local_test')
+        body={**draft(self.dispatch('/sessions/'+sid),'u:text:0'),'text':'Edited','confirmed':True,'id':str(uuid.uuid4())}
+        for _ in range(2):self.assertEqual(self.dispatch('/sessions/'+sid+'/edit','POST',body)['status'],'unknown')
+        self.assertEqual(self.writes,[('rewindV2',('local_test','u'))])
+
+    def test_edit_waits_for_claude_stop_to_settle_before_resending(self):
+        from coding_remote.message_edit import draft
+        original=self.controller.desktop.call
+        self.controller.desktop.capabilities['code'].append('rewindV2')
+        closing=[];observed=[]
+        async def call(kind,method,*args,**kwargs):
+            if method=='getTranscript':return [{'uuid':'u','type':'user','message':{'role':'user','content':'Original'}}]
+            if method=='rewindV2':
+                closing.extend([(True,True),(False,True),(False,False),(False,False)])
+                self.writes.append((method,args));return {'prefill':'Original'}
+            if method=='getSession' and closing:
+                running,owed=closing.pop(0);observed.append((running,owed))
+                return {**self.controller.desktop.raw,'turnRunning':running,'stopOwed':owed,'lifecycleState':'running'}
+            if method=='sendMessage':self.assertEqual(observed,[(True,True),(False,True),(False,False),(False,False)])
+            return await original(kind,method,*args,**kwargs)
+        self.controller.desktop.call=call;sid=model.gateway_id('code','local_test')
+        body={**draft(self.dispatch('/sessions/'+sid),'u:text:0'),'text':'Edited','confirmed':True,'id':str(uuid.uuid4())}
+        self.assertEqual(self.dispatch('/sessions/'+sid+'/edit','POST',body)['status'],'accepted')
+        self.assertEqual(self.writes,[('rewindV2',('local_test','u')),('sendMessage',('local_test','Edited'))])
 
     def test_metadata_actions_confirm_and_deduplicate(self):
         self.controller.desktop.capabilities['code'] += ['delete', 'archive', 'updateSession']

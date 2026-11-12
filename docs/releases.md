@@ -1,14 +1,66 @@
 # 版本记录
 
-以下为当前修改版的主要变化，本地构建产物位于 `dist/`。构建所用的原始 Windows EXE 与 Android APK 来自 [Abyxs/codex-mobile-assistant 的 Releases](https://github.com/Abyxs/codex-mobile-assistant/releases)。
+以下为当前修改版的主要变化。安装包通过 [GitHub Releases](https://github.com/2389859005/coding-mobile/releases) 分发，本地构建产物位于 `dist/`。构建所用的原始 Windows EXE 与 Android APK 来自 [Abyxs/codex-mobile-assistant 的 Releases](https://github.com/Abyxs/codex-mobile-assistant/releases)。
 
-## 2.2.2 · 源码更新（暂未打包）
+## 2.2.5 · Windows / Android
 
-- **实时目录**：会话列表新增 SSE 目录流，切换页面直接复用缓存并在桌面会话变化时更新，避免定时刷新造成的闪烁。
-- **会话状态**：统计托盘改为紧凑 chip，展开内容覆盖会话区域并保留输入框；执行步骤、队列和状态点统一使用原生图标。
-- **连接恢复**：实时通道断开后快速重连，同时保留短轮询回退。
-- **会话来源**：兼容 ChatGPT Desktop 与 MCP 来源的普通会话，并继续过滤子代理线程。
-- **版本**：源码版本与未来构建元数据同步为 2.2.2，本轮未生成安装包。
+**已发布**：安装包见 [v2.2.5 Release](https://github.com/2389859005/coding-mobile/releases/tag/v2.2.5)。
+
+2026-11-11 追加修订 R4：项目目录标题放大并收紧与会话条的间距；手机更换主题、显示模式或字体后保留“外观与主题”页面。补齐桌面停止和模型变化的事件推送。Windows 首页仅显示扫码连接，已有有效绑定时隐藏二维码与刷新按钮；删除桌面外观设置，统一设置行、分组间距和可伸缩输入框。减少页面重建、无关状态采集和日志主线程读取，修复后台垃圾回收等待 Tk 导致的拖动卡顿。最终 EXE 实测三个客户端均连接，Claude 19 个、ChatGPT 131 个、DeepSeek 51 个会话读取通过；应用版本仍为 2.2.5。详见 [R4 修订与验证](revision-2.2.5.md#2026-11-11-界面性能与状态同步修订-r4)。
+
+2026-11-11 追加修订 R3：修复 Windows 打包环境下 DeepSeek 桥接脚本的查找路径，保留已验证的 Claude Console 整段粘贴与完整核对。手机会话条按标题自适应为 1.5–2.5 行高度，条间留半行，圆角表面之间去掉直线分隔；桌面应用页的重新连接仅保留在操作弹窗。SSH 地址与别名另存为发布目录内的 `SSH连接信息.txt`。正式 EXE 实测 Claude 18 个会话、DeepSeek 51 个会话，浅／深色模拟器界面回归通过，应用版本仍为 2.2.5。
+
+2026-11-11 追加修订 R2：修复 Claude 历史目录读取阻挡初始化和 Console 同步无障碍读取停顿；新增每项应用的重新连接按钮、两行会话名与分隔、四种字体和真实主题预览，过滤重复临时连接；悬浮窗标题与正文分层。客户端菜单继续使用最大 176dp 的页面内折叠列表。详见 [2.2.5 修订与验证](revision-2.2.5.md) 和 [配色来源](mobile-palettes.md)。
+
+2026-11-10：会话、状态与队列改为源事件触发；手机取消定时内容补查和常驻监控通知。修复持续输出时慢来源的状态饥饿，保留断线恢复及任务提醒。改进公网 HTTPS 连接和扫码错误说明。详见[修订与验证](revision-2.2.5.md)。
+
+| 平台 | 文件 | SHA-256 |
+| --- | --- | --- |
+| Windows | `release-2.2.5-r4/CodingRemoteAssistant-Windows-2.2.5.exe` | `dc4a4116a6e0364bbda4d427cdb2e7f3b56ba0a6981a324ba68be21c3be98fbc` |
+| Android | `release-2.2.5-r4/CodingRemoteAssistant-Android-2.2.5.apk` | `b4e2b9250b60bb46636717a88c9b64f97214986b6ab41863cc3e1d832c81a5f3` |
+
+## 2.2.4 · Windows / Android
+
+2026-11-10：新增固定 HTTPS 自有服务器永久绑定，支持反向 SSH 自动重连、网关身份验证和独立永久凭据。修复会话内容未更新但仍有心跳时不补查、文件通知遗漏，以及慢客户端阻塞悬浮窗状态；Android 前台服务保持后台监控并显示持续通知。详见[修订与验证](revision-2.2.4.md)及[服务器部署](azure-server.md)。
+
+| 平台 | 文件 | SHA-256 |
+| --- | --- | --- |
+| Windows | `release-2.2.4/CodingRemoteAssistant-Windows-2.2.4.exe` | `962117d93f672418dc05af7945aed43728003ff1c45c094c591dc4f243c8becf` |
+| Android | `release-2.2.4/CodingRemoteAssistant-Android-2.2.4.apk` | `c7515af35ba0a2b99ee5cde58cde1d3865efeb6ead67537e172c33e6c18a7fbe` |
+
+183 项 Python 回归、Windows 包自检/UI 自检、Android 实际 HTTP/SSE 与后台悬浮窗更新验证通过。Azure 公网使用隔离数据验证配对、SSE、隧道恢复和撤销，证书模拟续期成功；实体手机尚未验证。
+
+## 2.2.3 · Windows / Android
+
+2026-11-08：继续完成本版调整。删除双端工作台及桌面通知中心，加入独立终端、三种主题与手机背景图，修复重进会话的执行详情，加入宠物局部动作与悬浮应用图标。详见[修订记录与验证](revision-2.2.3.md)。请同时更新两端；版本号仍为 2.2.3。
+
+| 平台 | 文件 | SHA-256 |
+| --- | --- | --- |
+| Windows | `CodingRemoteAssistant-Windows-2.2.3.exe` | `4377bf8fa7dc8024cfebe6baa0b2171c730cbc4651070c239de548111dc26b3e` |
+| Android | `CodingRemoteAssistant-Android-2.2.3.apk` | `13d8caad3595bdd762b3177c0500af98ff0e3f36a0f44f8643f5ebe5c3260b1d` |
+
+174 项 Python 回归、Windows 安装包自检及 UI 自检、模拟器浅深色与主题背景、详情重进、终端、图片、悬浮窗和真实 HTTP/SSE 检查通过。实体手机与完整公网链路尚未验证。
+
+## 2.2.2 · Windows / Android
+
+2026-11-08：本地安装包已构建。完整的逐项实现、测试和依赖说明见 [实施核对](implementation-audit-2.2.2.md)。本次仅保留扫码与 Tailscale 永久绑定，重写手机设置，固定应用图标，加入用户消息撤回编辑，并精简桌面设置和执行详情折叠区；见 [修订记录](revision-2.2.2.md)。
+
+| 平台 | 文件 | SHA-256 |
+| --- | --- | --- |
+| Windows | `CodingRemoteAssistant-Windows-2.2.2.exe` | `4ac2caa5690fe0de30ed181212d1c92bbbfb2eec816a66387ccf2f6213107bc7` |
+| Android | `CodingRemoteAssistant-Android-2.2.2.apk` | `71c46e4576f3072fa437e8fa85615d6583c9e6259489c700d5a3fc886dc8bc0c` |
+
+- **端口冲突修复**：Windows 网关改为独占监听，被占用时自动选择新端口；临时隧道与永久连接使用实际端口。修复端口冲突后资源清理异常和退出时启动中的隧道残留。手机不再提示修改已删除的转发端口设置。
+- **手机设置精简**：删除“应用”分组及“存储与关于”入口。
+- **扫码与外观**：移除 LAN / SSH 手机连接，恢复原有 Tailscale 永久绑定；临时隧道隔离配置并验证公网电脑身份，手机校验网关后 HTTP POST 配对。重写可搜索的分组设置，统一浅色／深色设计，删除颜色主题网格和宠物角标。
+- **应用图标与消息编辑**：列表底栏固定显示三个真实应用图标；会话隐藏底栏，回复旁显示应用图标。Claude / Codex 用户消息长按撤回编辑，发送时替换原轮及后续记录，取消恢复普通草稿。防止历史冲突与重复写入；Claude 图片消息暂需在电脑编辑。
+- **手机常驻页面**：会话、列表、设置、文件/Git/终端/智能体/侧聊工作台保留实际视图、草稿、阅读位置与展开状态；执行详情使用原位展开的紧凑折叠区，图标按用途统一。
+- **统一实时通道**：桌面事件总线共用源采集；安卓前台、后台监控和宠物共用 SSE，具备心跳、EOF 恢复、退避、网络监听和异步轮询回退。源未变化不重绘，慢客户端不堆积历史。
+- **线路和会话发现**：同电脑临时 HTTPS 与 Tailscale 扫码线路验证、探测和恢复；兼容 ChatGPT Desktop/MCP 本地普通会话，列表和详情统一过滤。没有新增 ChatGPT 网页云端历史连接器。
+- **桌面控制中心**：六页侧栏、扫码首页、三栏会话工作台、通知中心、API 模型目录与加密凭据、本机/SSH/WSL 终端、结构化增量日志；删除设置中“连接与网关”“其他连接方式”“应用”三组，保留 Tailscale 账户与设备撤销。删除更新维护、手机设备页面和右上角三个按钮。
+- **宠物与悬浮窗**：仅 Android 保留宠物与悬浮窗，Windows 宠物及设置全部移除。安卓使用同源事件，完成、错误、审批、问题、断线等状态；单击气泡、双击会话、长按锚定菜单、拖动吸附，完整/重要/角标/静默四模式，前台显示、气泡、速度及勿扰设置。
+- **文件打开**：点击即刻反馈，缓存优先并验证修订；大文件流式读取到私有缓存；图片、PDF、文本、Markdown、离线 HTML、支持编码的音视频；电脑具备 Office/LibreOffice 时按版式查看 Word/PPT/Excel，转换失败时现代格式回退文字。可分享原文件、保存或交给其他应用。
+- **本次交付**：按用户最新要求直接打包，未运行最终安装包测试或 Windows 自检。停止后续测试的要求到达前，源码端口冲突回归及实际公网配对已通过，已启动的 Python 回归完成 161 项。
 
 ## 2.2.1 · Windows / Android
 
@@ -283,7 +335,7 @@ Git 页统一使用应用主题，标题、分组、按钮和提交图同步适�
 
 ## 2.0.7 · Windows · 2026-10-06
 
-内置网络组件固定在 `%LOCALAPPDATA%\CodingRemoteAssistant\bin\tailnet.exe` 运行，避免不同解压路径导致防火墙重复询问。
+内置网络组件固定在 `%LOCALAPPDATA%CodingRemoteAssistantbintailnet.exe` 运行，避免不同解压路径导致防火墙重复询问。
 
 ## 2.0.6 · Windows / Android · 2026-10-06
 

@@ -9,10 +9,12 @@ import re
 import subprocess
 import threading
 import time
+import urllib.request
 
 class TemporaryLink:
     def __init__(self,port,directory,assets,allow_origin):
         self.port=port;self.directory=Path(directory);self.assets=Path(assets);self.allow_origin=allow_origin;self.process=None
+        self.lifecycle_lock=threading.Lock();self.stopped=threading.Event()
     def verified_binary(self):
         """Return the tunnel binary only after its bytes match the recorded digest.
 
@@ -39,8 +41,15 @@ class TemporaryLink:
         return binary
     def start(self):
         binary=self.verified_binary()
+        # A model proxy's default cloudflared config or TUNNEL_* variables must
+        # never replace the origin of this independently owned QR tunnel.
+        config=self.directory/'temporary-cloudflared.yml'
+        config.write_text('{}\n',encoding='utf-8')
+        environment={key:value for key,value in os.environ.items() if not key.upper().startswith(('TUNNEL_','CLOUDFLARED_'))}
         events=queue.Queue()
-        self.process=subprocess.Popen([str(binary),'tunnel','--url',f'http://127.0.0.1:{self.port}','--protocol','http2','--no-autoupdate'],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,encoding='utf-8',errors='replace',creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+        with self.lifecycle_lock:
+            if self.stopped.is_set():raise RuntimeError('临时连接已取消')
+            self.process=subprocess.Popen([str(binary),'tunnel','--config',str(config),'--url',f'http://127.0.0.1:{self.port}','--protocol','http2','--no-autoupdate'],env=environment,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,encoding='utf-8',errors='replace',creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
         process=self.process
         def read():
             origin=None;registered=False
@@ -56,10 +65,39 @@ class TemporaryLink:
         try:origin=events.get(timeout=55)
         except queue.Empty:self.close();raise RuntimeError('临时连接建立超时，请检查网络并重试')
         if not origin:self.close();raise RuntimeError('临时连接启动失败，请查看 temporary-link.log')
-        self.allow_origin(origin);logging.info('Temporary HTTPS ingress ready')
+        self.allow_origin(origin)
+        try:self.verify_origin(origin)
+        except Exception:
+            self.close()
+            raise
+        logging.info('Temporary HTTPS ingress ready; computer identity verified')
         return origin
+    def verify_origin(self,origin):
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self,*args,**kwargs):return None
+        opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect())
+        def identity(address):
+            with opener.open(address+'/api/gateway',timeout=8) as response:
+                value=json.loads(response.read(16384))
+            if value.get('service')!='coding-remote' or not value.get('computerId'):raise ValueError('扫码入口指向其他服务')
+            return value['computerId']
+        try:
+            expected=identity(f'http://127.0.0.1:{self.port}')
+            last=None
+            for attempt in range(3):
+                try:
+                    if identity(origin)!=expected:raise ValueError('扫码入口的电脑身份不匹配')
+                    return
+                except ValueError:raise
+                except Exception as error:last=error
+                if attempt<2:time.sleep(1)
+            raise last
+        except Exception as error:
+            raise RuntimeError('临时扫码地址未到达本机助手，请检查网络后重新开启连接') from error
     def close(self):
-        if self.process and self.process.poll() is None:
-            self.process.terminate()
-            try:self.process.wait(timeout=5)
-            except subprocess.TimeoutExpired:self.process.kill()
+        with self.lifecycle_lock:
+            self.stopped.set();process=self.process
+        if process and process.poll() is None:
+            process.terminate()
+            try:process.wait(timeout=5)
+            except subprocess.TimeoutExpired:process.kill();process.wait(timeout=5)

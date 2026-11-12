@@ -9,11 +9,13 @@ import android.widget.*;
 final class NativeDialogBuilder extends AlertDialog.Builder {
     private final NativeUi ui;
     private View custom;
+    private CharSequence title="";
     NativeDialogBuilder(Context c,NativeUi u){super(c);ui=u;}
+    @Override public AlertDialog.Builder setTitle(CharSequence value){title=value;return this;}
     @Override public AlertDialog.Builder setView(View v){decorate(v);if(v instanceof EditText){FrameLayout inset=new FrameLayout(getContext());inset.setPadding(ui.dp(20),ui.dp(8),ui.dp(20),ui.dp(8));inset.addView(v,new FrameLayout.LayoutParams(-1,-2));custom=inset;}else custom=v;return super.setView(custom);}
-    @Override public AlertDialog create(){AlertDialog d=super.create();d.setOnShowListener(ignored->style(d));return d;}
+    @Override public AlertDialog create(){LinearLayout header=new LinearLayout(getContext());header.setOrientation(LinearLayout.VERTICAL);header.setPadding(ui.dp(20),ui.dp(8),ui.dp(12),0);final AlertDialog[] holder=new AlertDialog[1];ui.sheetHeader(header,title.toString(),()->{if(holder[0]!=null)holder[0].dismiss();});super.setCustomTitle(header);AlertDialog d=super.create();holder[0]=d;d.setOnShowListener(ignored->style(d));return d;}
     @Override public AlertDialog show(){AlertDialog d=create();d.show();return d;}
-    private void style(AlertDialog d){ui.window(d.getWindow(),false);d.getWindow().setBackgroundDrawable(ui.surface(NativeUi.WHITE,NativeUi.CORNER_CARD,true));tint(d.getWindow().getDecorView());
+    private void style(AlertDialog d){ui.window(d.getWindow(),true);d.getWindow().setBackgroundDrawable(ui.surface(NativeUi.WHITE,NativeUi.CORNER_SHEET,true));tint(d.getWindow().getDecorView());
         ListView list=d.getListView();if(list!=null){list.setDivider(null);list.setPadding(ui.dp(10),ui.dp(6),ui.dp(10),ui.dp(6));list.setSelector(ui.touch(NativeUi.TINT,NativeUi.CORNER_ROW,false));list.setOnScrollListener(new AbsListView.OnScrollListener(){public void onScrollStateChanged(AbsListView v,int state){}public void onScroll(AbsListView v,int first,int count,int total){for(int i=0;i<v.getChildCount();i++)tint(v.getChildAt(i));}});}
         // Positive is filled with the accent, neutral and negative stay text-only but
         // in different colours; all three used GREEN before, so a dialog with both a

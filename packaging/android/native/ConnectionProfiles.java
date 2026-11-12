@@ -14,6 +14,10 @@ final class ConnectionProfiles {
     private static final HashMap<String,Long> unhealthy=new HashMap<>();
     /** A recently identity-checked route can carry the next request directly. */
     private static final HashMap<String,Long> validated=new HashMap<>();
+    private static final HashMap<String,Long> latency=new HashMap<>();
+    static synchronized long latency(JSONObject route){return latency.getOrDefault(routeKey(route.optString("origin"),route.optString("token")),4000L);}
+    static synchronized void measured(JSONObject route,long elapsed,boolean good){String key=routeKey(route.optString("origin"),route.optString("token"));health(route,good);if(good){long old=latency.getOrDefault(key,elapsed);latency.put(key,(old+elapsed)/2);markValidated(route.optString("origin"),route.optString("token"));}if(latency.size()>64)latency.clear();}
+    static int compare(JSONObject a,JSONObject b){int cooldown=Boolean.compare(cooling(a),cooling(b));return cooldown!=0?cooldown:Long.compare(latency(a),latency(b));}
     private static String routeKey(String origin,String token){return origin+"\n"+token;}
     private static synchronized boolean recentlyValidated(String origin,String token){return validated.getOrDefault(routeKey(origin,token),0L)>android.os.SystemClock.elapsedRealtime();}
     private static synchronized void markValidated(String origin,String token){if(validated.size()>64)validated.clear();validated.put(routeKey(origin,token),android.os.SystemClock.elapsedRealtime()+30000);}
@@ -23,12 +27,58 @@ final class ConnectionProfiles {
     private static boolean retryable(IOException error){return !(error instanceof HttpFailure)||((HttpFailure)error).routeFailure;}
     private static void pause()throws InterruptedException{Thread.sleep(450);}
     static JSONObject read(Context c)throws Exception {String raw=SecureStore.read(c);return raw.isEmpty()?new JSONObject():new JSONObject(raw);}
+    static synchronized void migrateScanOnly(Context c)throws Exception {
+        if(c.getSharedPreferences("ui",0).getBoolean("scanOnlyV4",false))return;
+        JSONObject root=read(c);JSONArray kept=new JSONArray(),old=rows(root);JSONObject selected=null;
+        for(int i=0;i<old.length();i++){JSONObject route=old.getJSONObject(i);if(!TrustedOrigin.scanOrigin(route.optString("origin")))continue;kept.put(copy(route));if(selected==null||route.optString("token").equals(root.optString("token")))selected=route;}
+        if(kept.length()!=old.length()){
+            SecureStore.save(c,"legacy-device-v3",root.toString());
+            if(selected==null)SecureStore.clear(c);else SecureStore.save(c,copy(selected).put("profiles",kept).toString());
+        }
+        c.getSharedPreferences("ui",0).edit().putBoolean("scanOnlyV4",true).apply();
+    }
     static JSONArray rows(JSONObject root)throws Exception {JSONArray rows=root.optJSONArray("profiles");if(rows!=null)return rows;rows=new JSONArray();if(root.has("token"))rows.put(copy(root));return rows;}
-    static JSONObject copy(JSONObject row)throws Exception {return new JSONObject().put("origin",row.getString("origin")).put("token",row.getString("token")).put("computerId",row.optString("computerId")).put("mode",row.optString("mode",row.optString("origin").startsWith("http://100.")?"permanent":"temporary"));}
+    static JSONObject copy(JSONObject row)throws Exception {return new JSONObject().put("origin",row.getString("origin")).put("token",row.getString("token")).put("computerId",row.optString("computerId")).put("mode",mode(row)).put("expires",row.opt("expires"));}
+    private static String mode(JSONObject row){String mode=row.optString("mode");return mode.equals("permanent")||mode.equals("server")||mode.equals("ssh")||TrustedOrigin.tailnet(row.optString("origin"))?"permanent":"temporary";}
+    /** Cold launches prefer a durable route for the same paired computer. */
+    static synchronized JSONObject restore(Context c)throws Exception {
+        JSONObject root=read(c);if(!root.has("token")||mode(root).equals("permanent"))return root;
+        JSONArray saved=rows(root);
+        for(int i=saved.length()-1;i>=0;i--){JSONObject route=saved.getJSONObject(i);if(same(root,route)&&mode(route).equals("permanent")){select(c,route);return read(c);}}
+        return root;
+    }
+    static synchronized void reconcile(Context c,JSONObject route,JSONObject device)throws Exception {
+        if(!device.optString("computerId").equals(route.optString("computerId"))||device.optString("computerId").isEmpty())return;
+        String reported=device.optString("mode");if(!reported.equals("permanent")&&!reported.equals("temporary"))return;
+        JSONObject root=read(c);JSONArray profiles=rows(root);boolean changed=false;
+        for(int i=0;i<profiles.length();i++){JSONObject row=profiles.getJSONObject(i);if(row.optString("origin").equals(route.optString("origin"))&&row.optString("token").equals(route.optString("token"))&&!row.optString("mode").equals(reported)){row.put("mode",reported);if(reported.equals("permanent"))row.remove("expires");changed=true;}}
+        if(changed){if(root.optString("token").equals(route.optString("token")))root.put("mode",reported);root.put("profiles",profiles);SecureStore.save(c,root.toString());}
+    }
     static boolean same(JSONObject a,JSONObject b){return !a.optString("computerId").isEmpty()&&a.optString("computerId").equals(b.optString("computerId"));}
+    static String label(JSONObject route){
+        if(TrustedOrigin.tailnet(route.optString("origin")))return "永久连接";
+        return "permanent".equals(mode(route))?"SSH连接":"临时连接";
+    }
+    /** History is retained for failover, but temporary routes for this computer
+     * are not useful as duplicate settings entries. Show one latest route per
+     * computer and connection type, excluding the currently selected route. */
+    static JSONArray visibleAlternatives(JSONObject root)throws Exception {
+        JSONArray all=rows(root),out=new JSONArray();HashSet<String> seen=new HashSet<>();
+        String currentKey=root.optString("computerId")+"\n"+label(root);
+        seen.add(currentKey);
+        for(int i=all.length()-1;i>=0;i--){JSONObject route=all.getJSONObject(i);String address=route.optString("origin");
+            if(!TrustedOrigin.valid(address))continue;
+            if(address.equals(root.optString("origin"))&&route.optString("token").equals(root.optString("token")))continue;
+            if(same(root,route)&&mode(route).equals("temporary"))continue;
+            double expires=route.optDouble("expires",0);if(expires>0&&expires<System.currentTimeMillis()/1000.0)continue;
+            String identity=route.optString("computerId");String key=(identity.isEmpty()?address:identity)+"\n"+label(route);
+            if(seen.add(key))out.put(copy(route));
+        }
+        return out;
+    }
     static JSONObject merge(JSONObject root,JSONObject route)throws Exception {
         JSONArray out=new JSONArray(),old=rows(root);
-        for(int i=0;i<old.length();i++){JSONObject p=old.getJSONObject(i);if(p.optString("origin").equals(route.optString("origin")))continue;if(same(p,route)&&p.optString("mode").equals(route.optString("mode")))continue;out.put(copy(p));}
+        for(int i=0;i<old.length();i++){JSONObject p=old.getJSONObject(i);if(p.optString("origin").equals(route.optString("origin")))continue;out.put(copy(p));}
         out.put(copy(route));return copy(route).put("profiles",out);
     }
     static synchronized void add(Context c,JSONObject route)throws Exception {SecureStore.save(c,merge(read(c),route).toString());}
@@ -41,7 +91,7 @@ final class ConnectionProfiles {
         if(same(original,root)&&root.has("token"))out.add(copy(root));
         if(out.isEmpty()||!out.get(0).optString("token").equals(token))out.add(original);
         for(int i=0;i<rows.length();i++){JSONObject p=rows.getJSONObject(i);if(!same(p,original))continue;boolean present=false;for(JSONObject r:out)if(r.optString("token").equals(p.optString("token")))present=true;if(!present)out.add(p);}
-        return out;
+        out.sort(ConnectionProfiles::compare);return out;
     }
     static JSONObject request(Context c,Transport net,String origin,String token,String path,JSONObject body)throws Exception {
         if(token.isEmpty()){
@@ -57,11 +107,11 @@ final class ConnectionProfiles {
         for(JSONObject route:candidates){
             String host=route.optString("origin"),secret=route.optString("token");
             if(!origin.equals(host)||!token.equals(secret)||!recentlyValidated(host,secret))continue;
-            try{JSONObject direct=net.request(host,secret,path,body);health(route,true);return direct;}
+            try{JSONObject direct=net.request(host,secret,path,body);if(path.equals("/api/device"))reconcile(c,route,direct);health(route,true);return direct;}
             catch(IOException e){forgetValidated(host,secret);health(route,false);if(body!=null)throw e;last=e;}
         }
         // A recently broken route does not delay a working alternative on every poll.
-        candidates.sort((a,b)->Boolean.compare(cooling(a),cooling(b)));HashSet<String> unauthorized=new HashSet<>();
+        candidates.sort(ConnectionProfiles::compare);HashSet<String> unauthorized=new HashSet<>();
         for(int round=0;round<2&&chosen==null;round++){
         if(round>0)pause();
         for(JSONObject route:candidates){
@@ -77,6 +127,7 @@ final class ConnectionProfiles {
                 result=net.request(host,secret,body==null?path:"/api/device",null);
                 String reported=result.optString("computerId");
                 if(!expected.isEmpty()&&!reported.isEmpty()&&!expected.equals(reported))throw new SecurityException("电脑身份不匹配，请重新扫码");
+                if(body!=null||path.equals("/api/device")){reconcile(c,route,result);if(result.has("mode"))route.put("mode",result.optString("mode"));}
                 health(route,true);markValidated(host,secret);chosen=route;break;
             }catch(IOException e){last=e;if(!retryable(e))throw e;health(route,false);if(e instanceof HttpFailure&&((HttpFailure)e).code==401)unauthorized.add(route.optString("token"));}
         }

@@ -26,7 +26,9 @@ def session(surface, raw):
     if not isinstance(native, str) or not native:
         raise ValueError('Claude 会话缺少 sessionId')
     lifecycle = raw.get('lifecycleState', '')
-    active = raw.get('turnRunning', raw.get('isRunning', False)) or lifecycle in ('running', 'initializing')
+    # A live process/lifecycle is not necessarily a running turn. Explicit false
+    # must win when Desktop keeps an idle process warm after completion or stop.
+    active = raw['turnRunning'] if isinstance(raw.get('turnRunning'), bool) else raw['isRunning'] if isinstance(raw.get('isRunning'), bool) else lifecycle in ('running', 'initializing')
     requests = []
     for item in raw.get('pendingToolPermissions') or []:
         if not isinstance(item, dict):
@@ -77,7 +79,10 @@ def transcript(value):
         def flush():
             nonlocal text_part
             if texts:
-                result.append({'id':str(event_id)+':text:'+str(text_part), 'eventId':str(event_id), 'role':role,'text':'\n'.join(texts)})
+                text='\n'.join(texts)
+                interrupted=role=='user' and text.strip().startswith('[Request interrupted by user')
+                result.append({'id':str(event_id)+':text:'+str(text_part), 'eventId':str(event_id), 'role':'activity' if interrupted else role,'text':'任务已停止' if interrupted else text,
+                               **({'kind':'step','title':'任务已停止'} if interrupted else {}), **({'hasAttachments':True} if any(isinstance(block,dict) and block.get('type') in ('image','input_image') for block in blocks) else {})})
                 text_part += 1
                 texts.clear()
         for part,block in enumerate(blocks):
@@ -109,6 +114,12 @@ def transcript(value):
                                 if params.get('status'):task['status']=params['status']
                             task_changed=True
                 result.append({'id':str(event_id)+':tool:'+str(part),'role':'activity','kind':'step','title':title,'text':body or name,'status':block.get('status',''), 'tool':name, **({'tasks':task_snapshot()} if task_changed else {})})
+                from coding_remote.native_content import image_paths
+                images=image_paths({'name':name,'input':params})
+                if images:
+                    result.pop()
+                    for n,path in enumerate(images):
+                        result.append({'id':str(event_id)+':image:'+str(part)+':'+str(n),'role':'activity','kind':'image','title':'查看图片','text':'![图片](<'+path+'>)'})
                 if isinstance(params,dict) and name in ('Write','Edit','MultiEdit'):
                     content=params.get('content')
                     if content is None and 'new_string' in params:

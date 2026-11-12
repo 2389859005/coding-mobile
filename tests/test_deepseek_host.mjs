@@ -16,7 +16,15 @@ await apply(ctx,{configPath});const {port}=JSON.parse(await readFile(endpoint,'u
 const request=async(action,body={},token='fixture-secret')=>{const response=await fetch(`http://127.0.0.1:${port}/mobile`,{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({action,sid:'session-one',body})});return response;};
 try{
   assert.equal((await request('list',{},'wrong')).status,403);
+  assert.equal((await(await request('health')).json()).connected,true);
+  assert.equal((await request('health',{},'wrong')).status,403);
   const detail=await(await request('detail')).json();assert.equal(detail.session.title,'Fixture');assert.ok(!JSON.stringify(detail).includes('PRIVATE'));
+  const waitEvent=async previous=>{for(let i=0;i<100;i++){const value=await readFile(endpoint+'.events','utf8').catch(()=>'');if(value&&value!==previous)return value;await new Promise(r=>setTimeout(r,10));}throw Error('native change did not wake the host');};
+  row.running=false;handlers.get('api-session/status')('session-one',false);
+  const stoppedRevision=await waitEvent('');assert.equal((await(await request('detail')).json()).session.status,'idle');
+  row.projections.values.modelSelection.next.model='changed';handlers.get('session/event')({id:'session-one'},{type:'model/selection'});
+  await waitEvent(stoppedRevision);assert.equal((await(await request('detail')).json()).session.model,'deepseek/changed');
+  row.running=true;row.projections.values.modelSelection.next.model='chat';
   const models=await(await request('catalog')).json();assert.equal(models.models[0].id,'deepseek/chat');
   assert.equal(models.skills.filter(p=>p.id==='installed:@deepseek-ai/dsh-skill-office').length,1);assert.equal(models.skills.find(p=>p.name==='Office 文档').selectable,false);
   const before=pluginReads;await request('catalog',{section:'models'});assert.equal(pluginReads,before);

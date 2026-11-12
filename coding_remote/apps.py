@@ -147,15 +147,16 @@ def close_process(pid):
     finally:kernel.CloseHandle(handle)
 
 class Applications:
-    def __init__(self,directory,script,window,desktop=None,on_connected=None,codex=None):
+    def __init__(self,directory,script,window,desktop=None,on_connected=None,codex=None,deepseek=None):
         self.codex=codex
+        self.deepseek=deepseek
         self.desktop=desktop
         self.on_connected=on_connected or (lambda:None)
         self.directory=Path(directory);self.script=script;self.window=window;self.window_open=True
         self.stopped=threading.Event();self.wake=threading.Event();self.lock=threading.Lock()
         self.app_locks={key:threading.Lock() for key in (*NAMES,'assistant')}
         self.app_locks['claude']=self.lock
-        self.error='';self.injected=False;self.attempted_pid=None;self.next_attempt=0;self.last_log=''
+        self.error='';self.injected=False;self.attempted_pid=None;self.next_attempt=0;self.last_log='';self.receipt_deadline=0
         threading.Thread(target=self.monitor,daemon=True).start()
     def snapshot(self):
         # One unreachable client must never make the whole control panel unusable.
@@ -172,17 +173,47 @@ class Applications:
         for app,name in NAMES.items():
             try:
                 running=any('--type=' not in (p.get('CommandLine') or '') for p in desktop_rows(rows,app))
-                connected=bool(self.desktop and self.desktop.connected) if app=='claude' else codex_connected(self.codex) if app=='codex' else False
+                connected=bool(self.desktop and self.desktop.connected) if app=='claude' else codex_connected(self.codex) if app=='codex' else bool(self.deepseek and self.deepseek.connected)
+                if app=='deepseek' and connected:running=True
             except Exception:running,connected=False,False
             result.append({'id':app,'running':running,'connected':running and connected})
         result.append({'id':'assistant','running':self.window_open,'background':True})
         return {'apps':result,'claudeError':self.error}
     def execute(self,app,action,confirmed=False):
-        if app not in (*NAMES,'assistant') or action not in ('start','stop','restart','shutdown','cancel'):raise ValueError('不支持的应用操作')
+        if app not in (*NAMES,'assistant') or action not in ('start','stop','restart','reconnect','shutdown','cancel'):raise ValueError('不支持的应用操作')
+        if action=='reconnect' and app=='claude':
+            # Do not block this request on keyboard input, and never queue a
+            # second injection while the first is still submitting its script.
+            if not self.lock.acquire(blocking=False):
+                return {'status':'accepted','message':'正在输入 Claude 连接脚本，请等待当前输入完成'}
+            try:
+                if self.desktop and self.desktop.connected:
+                    self.connection_ready()
+                    return {'status':'accepted','connected':True,'message':'Claude 连接已恢复'}
+                if self.receipt_deadline>time.monotonic():
+                    return {'status':'accepted','message':'Claude 桥接正在初始化，无需重复输入'}
+                self.attempted_pid=None;self.next_attempt=0;self.error='正在重新连接 Claude…';self.wake.set()
+                return {'status':'accepted','message':self.error}
+            finally:self.lock.release()
         with self.app_locks[app]:
+            if action=='reconnect':
+                if app=='assistant':
+                    self.wake.set()
+                    return {'status':'accepted','connected':True,'message':'助手连接可用，正在重新同步应用状态'}
+                if app=='codex':
+                    ipc=getattr(self.codex,'ipc',None)
+                    if ipc is not None:ipc.close()
+                    return self.connect_codex()
+                if self.deepseek:
+                    self.deepseek.install()
+                    connected=self.deepseek.connected
+                    return {'status':'accepted','connected':connected,'message':'DeepSeek 已重新连接' if connected else 'DeepSeek 桥接未响应；请确认已启动，首次加载桥接后需重启 DeepSeek'}
+                raise ValueError('DeepSeek 桥接尚未准备好')
             if app=='assistant':
                 if action in ('shutdown','cancel'):return self.power(action,confirmed)
-                if action=='stop' and not confirmed:raise ValueError('请确认关闭助手窗口')
+                if action not in ('stop','restart'):raise ValueError('桌面助手仅支持关闭或重启')
+                if not confirmed:raise ValueError('请确认助手操作')
+                if action=='restart':self.window(False)
                 self.window_open=action!='stop';self.window(self.window_open)
                 return {'status':'accepted','background':True}
             current=main_processes(app,True)
@@ -204,7 +235,7 @@ class Applications:
                 if app=='codex' and self.codex:
                     try:self.codex.ipc.close()
                     except Exception:logging.debug('Codex IPC close failed',exc_info=True)
-                if app=='claude':self.injected=False
+                if app=='claude':self.injected=False;self.receipt_deadline=0;self.attempted_pid=None
                 if action=='stop':return {'status':'accepted'}
                 # A packaged client cannot be reactivated the instant it was killed.
                 time.sleep(1.0)
@@ -215,6 +246,8 @@ class Applications:
                 if app=='claude':
                     if keyboard.enable_devtools(path):
                         return {'status':'needs_restart','message':'已启用 Claude 开发者工具，已有实例需要正常重启一次才能生效'}
+                    if self.receipt_deadline>time.monotonic():
+                        return {'status':'accepted','message':'Claude 连接脚本已提交，正在初始化…'}
                     self.attempted_pid=None;self.next_attempt=time.monotonic()+1;self.wake.set()
                 return {'status':'accepted','message':'正在连接 Claude…' if app=='claude' else '应用已启动'}
             log_path=self.directory/(app+'-startup.log')
@@ -275,15 +308,15 @@ class Applications:
     def connect_codex(self):
         try:
             ipc=getattr(self.codex,'ipc',None)
-            if ipc is None:raise RuntimeError('Codex 桌面连接尚未准备好')
+            if ipc is None:raise RuntimeError('ChatGPT 桌面连接尚未准备好')
             ipc.connect()
-            if not ipc.client_id or not ipc.socket:raise RuntimeError('未收到 Codex 连接回执')
-            return {'status':'accepted','connected':True,'message':'Codex 已打开，桌面连接已建立'}
+            if not ipc.client_id or not ipc.socket:raise RuntimeError('未收到 ChatGPT 连接回执')
+            return {'status':'accepted','connected':True,'message':'ChatGPT 已打开，桌面连接已建立'}
         except Exception as exc:
-            return {'status':'accepted','connected':False,'message':'Codex 已打开，但桌面未连接：'+str(exc)[:200]}
+            return {'status':'accepted','connected':False,'message':'ChatGPT 已打开，但桌面未连接：'+str(exc)[:200]}
     def connection_ready(self,pid=None):
         first=not self.injected
-        self.injected=True;self.error='';self.attempted_pid=None
+        self.injected=True;self.error='';self.attempted_pid=None;self.receipt_deadline=0
         if not first:return
         logging.info('Claude keyboard bridge connected')
         try:
@@ -293,7 +326,7 @@ class Applications:
             self.on_connected()
             logging.info('Claude connection ready; DevTools closed; assistant minimize requested')
         except Exception as exc:
-            # UI cleanup must never invalidate an already authenticated bridge.
+            # UI cleanup must never invalidate an already connected bridge.
             self.error='Claude 已连接，但窗口收起失败：'+str(exc)[:200]
             logging.warning(self.error)
 
@@ -304,23 +337,31 @@ class Applications:
         current=main_processes('claude')
         self.injected=False
         if not current:
-            self.attempted_pid=None;self.error='Claude 未启动，点击页面标题选择启动'
+            self.attempted_pid=None;self.receipt_deadline=0;self.error='Claude 未启动，点击页面标题选择启动'
             if self.desktop:self.desktop.disconnected(self.error)
             return
         pid=current[0]['ProcessId']
         # One automatic attempt per failed process. Explicit Start retries without
         # restarting Claude; an established bridge reload gets one new attempt.
-        if self.attempted_pid==pid or time.monotonic()<self.next_attempt:return
+        if self.attempted_pid==pid:
+            if self.receipt_deadline and time.monotonic()>=self.receipt_deadline:
+                self.receipt_deadline=0
+                raise RuntimeError('未收到 Claude 连接回执，请检查 Console 中的错误或项目目录信任；点击标题选择启动可重试')
+            return
+        if time.monotonic()<self.next_attempt:return
         self.attempted_pid=pid;self.error='正在通过键盘连接 Claude…'
         if self.desktop:self.desktop.disconnected(self.error)
         if keyboard.enable_devtools(current[0]['ExecutablePath']):
             raise RuntimeError('已启用开发者工具；当前 Claude 在设置更新前已运行，需要通过手机标题选择重启一次')
-        keyboard.inject(pid,self.script,self.directory)
-        deadline=time.monotonic()+15
-        while not self.stopped.wait(.25) and time.monotonic()<deadline:
-            if self.desktop and self.desktop.connected:
-                self.connection_ready(pid);return
-        raise RuntimeError('未收到 Claude 连接回执，请检查 Console 中的错误或项目目录信任；点击标题选择启动可重试')
+        keyboard.inject(pid,self.script() if callable(self.script) else self.script,self.directory)
+        # Cold Desktop startup can still be loading its session registry. The
+        # submitted connector owns that initialization; never inject it twice.
+        self.error='脚本已提交，正在初始化 Claude 连接…'
+        if self.desktop:self.desktop.disconnected(self.error)
+        self.receipt_deadline=time.monotonic()+180
+        if self.desktop and self.desktop.connected:self.connection_ready(pid)
+        # Release the application lock while Desktop initializes. The monitor
+        # observes readiness, leaving stop/restart controls responsive meanwhile.
     def monitor(self):
         while not self.stopped.is_set():
             self.wake.wait(4);self.wake.clear()

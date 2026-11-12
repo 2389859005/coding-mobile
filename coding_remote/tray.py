@@ -3,6 +3,7 @@ import logging
 from pathlib import Path
 import subprocess
 import threading
+import base64
 
 
 class Tray:
@@ -16,10 +17,17 @@ class Tray:
                 for line in self.process.stdout:
                     action=line.strip()
                     if action=='ready':self.ready=True
-                    elif action in ('show','minimize','settings','logs','quit') and not self.closed:callback(action)
+                    elif (action in ('show','minimize','settings','logs','quit') or action.startswith('notice:')) and not self.closed:callback(action)
                 self.ready=False
             threading.Thread(target=read,daemon=True).start()
         except OSError:logging.exception('Tray startup failed')
+
+    def notify(self,title,body,backend,sid):
+        if not self.ready or self.closed or backend not in ('codex','claude','deepseek') or any(c in sid for c in '\n\r\t'):return
+        try:
+            encode=lambda text:base64.b64encode(str(text).encode()).decode()
+            self.process.stdin.write('\t'.join(('notify',encode(title),encode(body),backend,sid))+'\n');self.process.stdin.flush()
+        except (OSError,ValueError):logging.exception('Tray notification could not be shown')
 
     def close(self):
         self.closed=True;self.ready=False

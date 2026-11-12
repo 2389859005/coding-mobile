@@ -8,7 +8,7 @@ import android.graphics.drawable.Drawable;
  * ring moves as a whole instead of a short trail crossing one side. */
 final class FlowBorderDrawable extends Drawable {
     // First and last entries match, so the seam of the sweep is invisible.
-    private static final int[] COLORS={0xff16d6ae,0xff43a4ff,0xff8965ff,0xffef67d1,0xffffc75c,0xff16d6ae};
+    private static int[] colors(){return new int[]{NativeUi.RUN,NativeUi.LINE,NativeUi.RUN};}
     private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path outline=new Path();
     private final Matrix rotate=new Matrix();
@@ -28,13 +28,13 @@ final class FlowBorderDrawable extends Drawable {
         if(sweep==null||Math.abs(cached.width()-box.width())>.5f||Math.abs(cached.height()-box.height())>.5f
             ||Math.abs(cached.centerX()-box.centerX())>.5f||Math.abs(cached.centerY()-box.centerY())>.5f){
             cached.set(box);
-            sweep=new SweepGradient(box.centerX(),box.centerY(),COLORS,null);
+            sweep=new SweepGradient(box.centerX(),box.centerY(),colors(),null);
         }
         rotate.setRotate(phase*360f,box.centerX(),box.centerY());
         sweep.setLocalMatrix(rotate);
         paint.setShader(sweep);paint.setStyle(Paint.Style.STROKE);
         // A soft outer glow plus the crisp ring; both cover the entire border.
-        paint.setStrokeWidth(stroke*2.8f);paint.setAlpha(46);canvas.drawPath(outline,paint);
+
         paint.setStrokeWidth(stroke);paint.setAlpha(255);canvas.drawPath(outline,paint);
         paint.setShader(null);
     }

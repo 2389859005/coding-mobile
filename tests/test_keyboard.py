@@ -21,8 +21,8 @@ class KeyboardTests(unittest.TestCase):
             self.assertTrue(json.loads((Path(folder)/'Packages/Claude_test/LocalCache/Roaming/Claude/developer_settings.json').read_text())['allowDevTools'])
             self.assertFalse(keyboard.enable_devtools('C:/Programs/Claude.exe'))
 
-    def test_direct_script_no_eval_clipboard_or_commandline_secret(self):
-        script='/* coding remote script */(()=>{window.fixture="test"})();'
+    def test_direct_script_no_eval_or_commandline_secret(self):
+        script='window.__claudeMobileBridge?.stop();(()=>{window.fixture="test"})();'
         with tempfile.TemporaryDirectory() as folder,patch.object(Path,'is_file',return_value=True),patch.object(keyboard.subprocess,'run') as run:
             def result(args,**kwargs):
                 self.assertEqual(kwargs['timeout'],240)
@@ -36,13 +36,13 @@ class KeyboardTests(unittest.TestCase):
     def test_failure_and_timeout_cleanup(self):
         with tempfile.TemporaryDirectory() as folder,patch.object(Path,'is_file',return_value=True),patch.object(keyboard.subprocess,'run') as run:
             run.return_value=types.SimpleNamespace(returncode=1,stdout='Console not focused')
-            with self.assertRaisesRegex(RuntimeError,'Console not focused'):keyboard.inject(42,'/* coding remote script */test',folder)
+            with self.assertRaisesRegex(RuntimeError,'Console not focused'):keyboard.inject(42,'window.__claudeMobileBridge?.stop();',folder)
             run.side_effect=subprocess.TimeoutExpired('helper',90)
-            with self.assertRaises(subprocess.TimeoutExpired):keyboard.inject(42,'/* coding remote script */test',folder)
+            with self.assertRaises(subprocess.TimeoutExpired):keyboard.inject(42,'window.__claudeMobileBridge?.stop();',folder)
             self.assertFalse((Path(folder)/'keyboard-connect.js').exists())
 
     def test_rejects_multiline_or_unbuilt_script(self):
         with tempfile.TemporaryDirectory() as folder,patch.object(Path,'is_file',return_value=True),patch.object(keyboard.subprocess,'run') as run:
-            for script in ('test','/* coding remote script */\nalert(1)'):
+            for script in ('test','window.__claudeMobileBridge?.stop();\nalert(1)'):
                 with self.assertRaises(ValueError):keyboard.inject(42,script,folder)
             run.assert_not_called()

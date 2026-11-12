@@ -6,6 +6,11 @@ export const inject=['sessionController','sessionSkillCatalog','permissionPreset
 export async function apply(ctx,config){
   const {token,endpoint}=JSON.parse(await readFile(config.configPath,'utf8'));
   const questions=new Map(),history=new Map();
+  let eventVersion=0,eventWrites=Promise.resolve(),disposed=false,eventTimer;
+  const changed=()=>{if(disposed||eventTimer)return;eventTimer=setTimeout(()=>{eventTimer=null;const revision=++eventVersion;eventWrites=eventWrites.then(()=>writeFile(endpoint+'.events',String(revision))).catch(()=>{});},40);};
+  // Runtime status can change without a new log record (for example cancel).
+  // model/selection is a session event; it must wake readers before the next turn.
+  for(const name of ['api-session/status','api-session/added','api-session/removed','session/event'])ctx.on(name,changed);
   const signal=()=>new AbortController().signal;
   const list=async()=> (await ctx.sessionController.list({},signal())).items;
   const find=async id=>{const row=(await list()).find(r=>r.sessionId===id);if(!row)throw Error('DeepSeek 会话不存在');return row;};
@@ -59,11 +64,13 @@ export async function apply(ctx,config){
     let resolveMobile,rejectMobile;
     const mobile=new Promise((resolve,reject)=>{resolveMobile=resolve;rejectMobile=reject;});
     questions.set(id,{sid:req.agent.id,public:{id,tool:'提问',needsInput:true,input:{questions:req.questions}},resolve:resolveMobile});
+    changed();
     const abort=()=>rejectMobile(Error('提问已取消'));original?.addEventListener('abort',abort,{once:true});
     try{return await Promise.race([Promise.resolve().then(next),mobile]);}
-    finally{questions.delete(id);controller.abort();original?.removeEventListener('abort',abort);req.signal=original;}
+    finally{questions.delete(id);changed();controller.abort();original?.removeEventListener('abort',abort);req.signal=original;}
   },{prepend:true,global:true});
   async function dispatch(action,sid,body){
+    if(action==='health')return {connected:true};
     if(action==='list')return {connected:true,sessions:(await list()).filter(r=>!r.parentSessionId).map(r=>({...normalize(r),archived:(ctx.workspaceRegistry.archivedSessionIds||[]).includes(r.sessionId)})).sort((a,b)=>Number(a.archived)-Number(b.archived))};
     if(action==='projects'){const seen=new Map();for(const row of await list())if(row.cwd)seen.set(row.cwd,{key:row.cwd,cwd:row.cwd,name:row.cwd.replaceAll('\\','/').split('/').pop()});for(const w of ctx.workspaceRegistry.list())seen.set(w.path,{key:w.path,cwd:w.path,name:w.name||w.path});return {projects:[...seen.values()]};}
     if(action==='create'){const project=(await dispatch('projects')).projects.find(p=>p.key===body.projectKey);if(!project)throw Error('请选择现有项目');const result=await ctx.sessionController.create({sessionId:'session-'+body.id,cwd:project.cwd});if(body.title)await ctx.sessionController.rename({sessionId:result.sessionId,title:body.title});return {status:'ready',result:{id:result.sessionId,title:body.title||'新会话'}};}
@@ -88,5 +95,5 @@ export async function apply(ctx,config){
   }catch(error){res.writeHead(400,{'content-type':'application/json'});res.end(JSON.stringify({error:String(error.message||error)}));}});
   await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});
   const port=server.address().port;await writeFile(endpoint+'.tmp',JSON.stringify({port,pid:process.pid}));await rename(endpoint+'.tmp',endpoint);
-  ctx.on('dispose',async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));await unlink(endpoint).catch(()=>{});});
+  ctx.on('dispose',async()=>{disposed=true;clearTimeout(eventTimer);server.closeAllConnections();await new Promise(resolve=>server.close(resolve));await eventWrites;await unlink(endpoint+'.events').catch(()=>{});await unlink(endpoint).catch(()=>{});});
 }

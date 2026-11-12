@@ -25,7 +25,7 @@ class CodexRPC:
             else:
                 from bridge.catalog import Catalog
                 executable = Catalog.find_runtime()
-        if not executable: raise ValueError('找不到 Codex 运行时')
+        if not executable: raise ValueError('找不到 ChatGPT 运行时')
         self.process = subprocess.Popen([str(executable), 'app-server', '--listen', 'stdio://'],
             cwd=self.home, env=dict(os.environ, CODEX_HOME=str(self.home), CODEX_INTERNAL_ORIGINATOR_OVERRIDE='Codex Desktop'),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
@@ -53,11 +53,11 @@ class CodexRPC:
         while time.monotonic() < deadline:
             try: value = self.messages.get(timeout=max(.01, deadline-time.monotonic()))
             except queue.Empty: break
-            if value is None: raise RuntimeError('Codex 元数据连接已断开，请核对结果')
+            if value is None: raise RuntimeError('ChatGPT 元数据连接已断开，请核对结果')
             if value.get('id') != self.counter: continue
-            if 'error' in value: raise ValueError(value['error'].get('message', 'Codex 未接受操作'))
+            if 'error' in value: raise ValueError(value['error'].get('message', 'ChatGPT 未接受操作'))
             return value['result']
-        raise TimeoutError('Codex 元数据响应超时，请核对结果')
+        raise TimeoutError('ChatGPT 元数据响应超时，请核对结果')
 
     def __exit__(self, *args):
         self.process.stdin.close()

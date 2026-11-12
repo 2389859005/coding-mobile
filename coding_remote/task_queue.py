@@ -18,6 +18,8 @@ class TaskQueue:
         # Kept separate from self.lock so a slow send does not block polling.
         self.dispatch_lock = threading.RLock()
         self.stop = threading.Event()
+        self.wake = threading.Event()
+        self.retry_at = None
         self.worker = None
         self.path = Path(directory)/'task-queue.sqlite'
         self.connection = None
@@ -52,16 +54,33 @@ class TaskQueue:
 
     def start(self):
         if self.worker is None:
+            live=getattr(self.server,'live',None)
+            if live:live.start_sources()
+            self.wake.set()
             self.worker = threading.Thread(target=self._run, daemon=True, name='task-queue')
             self.worker.start()
 
     def _run(self):
-        while not self.stop.wait(2):
+        while not self.stop.is_set():
+            self.wake.wait(None if self.retry_at is None else max(0,self.retry_at-time.monotonic()))
+            self.wake.clear()
+            if self.stop.is_set():break
+            self.retry_at=None
             try:
                 self.tick()
             except Exception:
                 import logging
                 logging.exception('Queue worker failed')
+                self.retry_after(2)
+
+    def retry_after(self,seconds):
+        deadline=time.monotonic()+seconds
+        self.retry_at=min(self.retry_at,deadline) if self.retry_at is not None else deadline
+
+    def changed(self,backend,sid):
+        live=getattr(self.server,'live',None)
+        if live:live.invalidate(topic='session:'+backend+':'+sid)
+        self.wake.set()
 
     def listing(self, backend, sid):
         with self.lock:
@@ -130,6 +149,7 @@ class TaskQueue:
                 with self.lock:
                     self.db.execute('UPDATE queue_actions SET result=? WHERE id=?',(json.dumps(result),rid))
                     self.db.commit()
+        self.changed(backend,sid)
         return result
 
     @staticmethod
@@ -170,6 +190,7 @@ class TaskQueue:
             if state == 'rejected':
                 self.db.execute('DELETE FROM gates WHERE backend=? AND sid=?',(row['backend'],row['sid']))
             self.db.commit()
+        self.changed(row['backend'],row['sid'])
         return {**result,'queueId':row['id']}
 
     def tick(self):
@@ -182,6 +203,7 @@ class TaskQueue:
             try:
                 detail = self.server.dispatch(backend,sid,None,{})
                 if detail.get('connected') is False:
+                    self.retry_after(2)
                     continue
                 session = detail.get('session') or {}
             except Exception:
@@ -189,6 +211,7 @@ class TaskQueue:
                 # session for the lifetime of the process.
                 import logging
                 logging.exception('Queue could not read session %s/%s',backend,sid)
+                self.retry_after(2)
                 continue
             active = session.get('status') in ('active','running','working','inProgress')
             signature = self.signature(session)
@@ -203,6 +226,7 @@ class TaskQueue:
                     # The grace period matters for providers whose session rows carry
                     # no turn id (Claude, DeepSeek): without it the gate never opened
                     # again and the rest of the queue could never be sent.
+                    self.retry_after(8-self.gate_age(gate['signature']))
                     continue
                 if session.get('requests'):
                     continue
@@ -228,6 +252,7 @@ class TaskQueue:
         handle whether or not the worker stopped in time.
         """
         self.stop.set()
+        self.wake.set()
         if self.worker:
             self.worker.join(timeout=2)
             # A worker still inside tick() can open a connection after the drain

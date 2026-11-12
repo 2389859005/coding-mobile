@@ -8,6 +8,7 @@ import android.widget.*;
 final class FloatingNavigation extends LinearLayout {
     final Button top,latest;
     static final int DISC_DP=44;
+    static final int WIDTH_DP=92;
     static final int GAP_DP=0;
     static int spanDp(){return DISC_DP;}
     private float startX,startY,baseX,baseY;
@@ -27,11 +28,12 @@ final class FloatingNavigation extends LinearLayout {
         // but remove it from the visual hierarchy. One capsule is easier to understand
         // and no longer puts two floating targets over the transcript.
         top=ui.iconButton("arrow","回到顶部");top.setVisibility(GONE);
-        latest=ui.button("↓ 最新",false);latest.setContentDescription("回到最新");latest.setTextSize(NativeUi.CAPTION);latest.setTextColor(NativeUi.INK);latest.setGravity(Gravity.CENTER);latest.setPadding(ui.dp(14),0,ui.dp(14),0);
+        latest=ui.button("最新",false);latest.setContentDescription("回到最新");latest.setTooltipText("长按回到顶部");latest.setTextSize(NativeUi.CAPTION);latest.setTextColor(NativeUi.INK);latest.setGravity(Gravity.CENTER);latest.setPadding(ui.dp(12),0,ui.dp(12),0);ui.leading(latest,"latest",NativeUi.INK,NativeUi.GLYPH_INLINE);
         int disc=ui.dp(DISC_DP);
         latest.setBackground(ui.touch(NativeUi.WHITE,NativeUi.CORNER_DISC,true));latest.setElevation(ui.dp(NativeUi.LIFT_FLOATING));
         addView(latest,new LayoutParams(ui.dp(92),disc));
         top.setOnClickListener(v->toTop.run());latest.setOnClickListener(v->toLatest.run());
+        latest.setOnLongClickListener(v->{toTop.run();return true;});
         View.OnTouchListener drag=(v,e)->{
             if(e.getActionMasked()==MotionEvent.ACTION_DOWN){startX=e.getRawX();startY=e.getRawY();baseX=getX();baseY=getY();dragged=false;v.setPressed(true);
                 // The handle is brought back before the gesture is judged, so a tap on

@@ -27,16 +27,19 @@ public final class MonitorRegression extends Instrumentation {
             waitForIdleSync();
             JobScheduler scheduler = (JobScheduler)context.getSystemService(Context.JOB_SCHEDULER_SERVICE);
             JobInfo job = scheduler.getPendingJob(91);
-            if (job == null || !job.isPersisted() || !job.isPeriodic() || job.getNetworkType() != JobInfo.NETWORK_TYPE_ANY)
-                throw new AssertionError("Background completion check was not registered");
-            NotificationManager notifications = (NotificationManager)context.getSystemService(Context.NOTIFICATION_SERVICE);
-            for (android.service.notification.StatusBarNotification n : notifications.getActiveNotifications())
-                if (n.getId() == 90) throw new AssertionError("Unexpected persistent notification");
+            if (job != null)throw new AssertionError("Event monitor must not schedule polling jobs");
+            NotificationManager notifications=(NotificationManager)context.getSystemService(Context.NOTIFICATION_SERVICE);
+            SystemClock.sleep(1200);
+            for(android.service.notification.StatusBarNotification n:notifications.getActiveNotifications())
+                if(n.getId()==90)throw new AssertionError("Persistent monitor notification must be removed");
             context.getSharedPreferences("ui", 0).edit().putBoolean("notifications", false).commit();
             start.invoke(null, context);
             if (scheduler.getPendingJob(91) != null) throw new AssertionError("Disabled monitor still scheduled");
+            SystemClock.sleep(500);
+            for (android.service.notification.StatusBarNotification n : notifications.getActiveNotifications())
+                if (n.getId() == 90) throw new AssertionError("Disabled monitor still has a foreground notification");
             runOnMainSync(() -> app.finish());
-            result.putString("stream", "PASS: installed network permission; enabled monitor startup and repeated resume; persisted network job; no ongoing notification; disable cleanup.\n");
+            result.putString("stream", "PASS: installed network permission; enabled bound event monitor and repeated resume; no persistent notification or periodic polling job; disable cleanup.\n");
             finish(Activity.RESULT_OK, result);
         } catch (Throwable e) {
             result.putString("stream", "FAIL: " + android.util.Log.getStackTraceString(e));

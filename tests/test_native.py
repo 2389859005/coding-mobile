@@ -72,7 +72,12 @@ class NativeApiTests(unittest.TestCase):
         self.server=NativeServer(Bridge(),types.SimpleNamespace(desktop=types.SimpleNamespace(connected=False)),self.pair,self.root)
         self.thread=threading.Thread(target=self.server.serve_forever,daemon=True);self.thread.start()
         self.base=f'http://127.0.0.1:{self.server.server_port}'
-    def tearDown(self):self.server.shutdown();self.server.server_close();self.thread.join();self.tmp.cleanup()
+    def tearDown(self):
+        self.server.shutdown();self.server.live.close()
+        # Wait for fixture collectors before deleting their SQLite files on Windows.
+        self.server.live.pool.shutdown(wait=True,cancel_futures=True)
+        self.server.live.session_pool.shutdown(wait=True,cancel_futures=True)
+        self.server.server_close();self.thread.join();self.tmp.cleanup()
     def call(self,path,body=None,token='',origin=None):
         headers={'Content-Type':'application/json'}
         if token:headers['Authorization']='Bearer '+token
@@ -104,12 +109,30 @@ class NativeApiTests(unittest.TestCase):
             line=response.readline().decode('utf-8').rstrip('\r\n')
             if not line:break
             lines.append(line)
-        connection.close()
+        response.close();connection.close()
         self.assertIn('event: snapshot',lines)
         self.assertTrue(any(line.startswith('data: {') and 'hello' in line for line in lines))
     def test_approval_forms_are_not_silently_treated_as_simple_approval(self):
         value=codex_detail({'id':'x','requests':[{'id':'p','method':'item/tool/requestUserInput','params':{}}]})
         self.assertTrue(value['session']['requests'][0]['needsInput'])
+
+    def test_large_read_image_download_preserves_bytes_and_scope(self):
+        import hashlib
+        picture=self.root/'large-read.png'
+        data=b'\x89PNG\r\n\x1a\n'+b'fixture'*(2*1024*1024)
+        picture.write_bytes(data)
+        self.server.bridge.store.history=lambda sid:{'turns':[{'items':[{'type':'function_call','name':'functions.view_image','arguments':json.dumps({'path':str(picture)})}] if sid=='fixture' else []}]}
+        code=json.loads(self.pair.issue(self.base));_,receipt=self.call('/api/pair',{'token':code['token'],'device':'Fixture'})
+        from urllib.parse import quote
+        query='?path='+quote(str(picture))
+        self.assertEqual(self.call('/api/native/codex/fixture/file'+query,token=receipt['token'])[0],400)
+        request=Request(self.base+'/api/native/codex/fixture/download'+query,headers={'Authorization':'Bearer '+receipt['token']})
+        with urlopen(request) as response:
+            digest=hashlib.sha256()
+            while block:=response.read(65536):digest.update(block)
+            self.assertEqual(response.headers['Content-Type'],'image/png')
+        self.assertEqual(digest.digest(),hashlib.sha256(data).digest())
+        self.assertEqual(self.call('/api/native/codex/another/download'+query,token=receipt['token'])[0],400)
 
     def test_late_private_listener_registers_before_host_check(self):
         import http.client

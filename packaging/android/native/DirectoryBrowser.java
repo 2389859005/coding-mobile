@@ -41,7 +41,13 @@ final class DirectoryBrowser {
         list.setOnItemLongClickListener((p,v,n,id)->{JSONObject row=rows.get(n);copy(row.optString("absolutePath",absolute(row.optString("path"))));return true;});
         more.setOnClickListener(v->{if(!loading)load(path,rows.size());});
     }
-    void show(String initial){dialog=new NativeDialogBuilder(activity,ui).setTitle("工作目录").setView(body).setNegativeButton("关闭",null).create();dialog.setOnDismissListener(d->ticket++);dialog.setOnKeyListener((d,key,event)->{if(key==KeyEvent.KEYCODE_BACK&&!path.isEmpty()&&!path.equals(".")){if(event.getAction()==KeyEvent.ACTION_UP)parent();return true;}return false;});dialog.show();ui.window(dialog.getWindow(),true);navigate(initial,false);}
+    void show(String initial){
+        boolean first=dialog==null;
+        if(first){dialog=new NativeDialogBuilder(activity,ui).setTitle("工作目录").setView(body).setNegativeButton("关闭",null).create();dialog.setOnDismissListener(d->{saveScroll();ticket++;loading=false;});dialog.setOnKeyListener((d,key,event)->{if(key==KeyEvent.KEYCODE_BACK&&!path.isEmpty()&&!path.equals(".")){if(event.getAction()==KeyEvent.ACTION_UP)parent();return true;}return false;});}
+        dialog.show();ui.window(dialog.getWindow(),true);
+        if(!first&&initial.isEmpty()&&cache.containsKey(path))render(cache.get(path));else navigate(initial,false);
+    }
+    void dismiss(){saveScroll();ticket++;loading=false;if(dialog!=null&&dialog.isShowing())dialog.dismiss();}
     /** Reuse is what makes reopening the sheet instant; release it on session change. */
     void close(){ticket++;cache.clear();rows.clear();path="";if(dialog!=null){if(dialog.isShowing())dialog.dismiss();dialog=null;}}
     private void copy(String value){if(value.isEmpty())return;((ClipboardManager)activity.getSystemService(Context.CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("路径",value));Toast.makeText(activity,"路径已复制",Toast.LENGTH_SHORT).show();}

@@ -1,0 +1,717 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>coding远程 · 界面重设计原型</title>
+<style>
+:root{color-scheme:light}
+[data-theme=light]{
+  --canvas:#F4F5F7;--surface:#FFFFFF;--sunken:#ECEEF1;--line:#E1E4E9;--ink:#1B2230;--muted:#5F6876;
+  --accent:#3A4C9C;--on-accent:#FFFFFF;--accent-soft:#E8EBF6;
+  --run:#10776A;--run-hi:#6CD3C2;--wait:#9A6210;--wait-bg:#FBF3E4;--wait-line:#EBD3A6;--error:#B03F3A;
+  --term:#1A1E24;--term-ink:#D7DCE3;--stage:#DCDFE5;
+}
+[data-theme=dark]{color-scheme:dark;
+  --canvas:#15181D;--surface:#1E2228;--sunken:#262B32;--line:#2E333B;--ink:#E6E8EC;--muted:#9AA3AF;
+  --accent:#9DB0F0;--on-accent:#15181D;--accent-soft:#2A3250;
+  --run:#4FC2B0;--run-hi:#B5F0E6;--wait:#E2A64B;--wait-bg:#33291A;--wait-line:#5A4524;--error:#EE8F86;
+  --term:#101317;--term-ink:#D7DCE3;--stage:#0E1013;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:var(--stage);color:var(--ink)}
+body{font-family:"HarmonyOS Sans SC","MiSans","Microsoft YaHei UI","PingFang SC","Noto Sans SC",system-ui,sans-serif;font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.mono{font-family:"Cascadia Mono","JetBrains Mono",Consolas,ui-monospace,monospace}
+svg.i{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round;flex:none}
+
+/* page chrome */
+.top{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:16px;padding:14px 28px;background:var(--stage);border-bottom:1px solid var(--line)}
+.top h1{font-size:16px;font-weight:600}
+.top p{color:var(--muted);font-size:13px;flex:1}
+.seg{display:inline-flex;background:var(--sunken);border-radius:999px;padding:3px}
+.seg button{padding:5px 14px;border-radius:999px;font-size:13px;color:var(--muted)}
+.seg button[aria-pressed=true]{background:var(--surface);color:var(--ink);font-weight:500;box-shadow:0 1px 2px rgba(20,24,32,.12)}
+main{padding:28px;display:grid;gap:40px;max-width:1640px;margin:0 auto}
+.block>h2{font-size:15px;font-weight:600;margin-bottom:4px}
+.block>.note{color:var(--muted);font-size:13px;margin-bottom:14px;max-width:72ch}
+.fit{overflow:hidden;border-radius:14px}
+.fit>.scale{transform-origin:0 0}
+
+/* ===== status spine (the one bold element) ===== */
+.spine{position:relative}
+.spine::before{content:"";position:absolute;left:0;top:4px;bottom:4px;width:3px;border-radius:3px;background:var(--line)}
+.spine.run::before{background:linear-gradient(180deg,var(--run) 0%,var(--run) 35%,var(--run-hi) 50%,var(--run) 65%,var(--run) 100%);background-size:100% 300%;animation:flow 1.6s linear infinite}
+.spine.wait::before{background:var(--wait)}
+.spine.err::before{background:var(--error)}
+@keyframes flow{from{background-position:0 100%}to{background-position:0 -200%}}
+@media (prefers-reduced-motion:reduce){.spine.run::before{animation:none;background:var(--run)}}
+
+.tag{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:500;padding:1px 8px;border-radius:6px;white-space:nowrap}
+.tag.run{color:var(--run);background:color-mix(in srgb,var(--run) 12%,transparent)}
+.tag.wait{color:var(--wait);background:var(--wait-bg)}
+.tag.err{color:var(--error);background:color-mix(in srgb,var(--error) 12%,transparent)}
+.time{color:var(--muted);font-size:12px}
+.app{width:18px;height:18px;flex:none;border-radius:5px}
+
+/* shared message pieces */
+.msg-user{align-self:flex-end;max-width:78%;background:var(--accent-soft);padding:10px 14px;border-radius:16px 16px 4px 16px}
+.reply{padding-left:14px}
+.who{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;margin-bottom:4px}
+.reply p{margin-bottom:8px}
+code.inline{font-family:"Cascadia Mono",Consolas,monospace;font-size:.9em;background:var(--sunken);padding:1px 5px;border-radius:5px}
+.exec{display:flex;align-items:center;gap:8px;width:100%;text-align:left;padding:8px 10px;border-radius:10px;color:var(--muted);font-size:13px;background:var(--sunken)}
+.exec .chev{transition:transform .18s}
+.exec[aria-expanded=true] .chev{transform:rotate(90deg)}
+.exec .num{margin-left:auto;display:flex;gap:6px}
+.add{color:var(--run)}.del{color:var(--error)}
+.steps{display:none;margin-top:6px;padding:6px 4px 2px 10px;font-size:13px;color:var(--muted)}
+.exec[aria-expanded=true]+.steps{display:block}
+.steps li{list-style:none;display:flex;gap:8px;padding:3px 0}
+.steps li svg{width:16px;height:16px;margin-top:2px}
+.steps li.now{color:var(--ink)}
+.live{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--run);margin-top:8px}
+.dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}
+.live .dot{animation:breathe 1.6s ease-in-out infinite}
+@keyframes breathe{50%{opacity:.3}}
+@media (prefers-reduced-motion:reduce){.live .dot{animation:none}}
+
+.pending{background:var(--wait-bg);border:1px solid var(--wait-line);border-radius:14px;padding:12px 14px}
+.pending .ph{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--wait);font-weight:500}
+.pending .ph .more{margin-left:auto;color:var(--muted);font-weight:400}
+.pending h4{font-size:15px;font-weight:600;margin:6px 0}
+.pending pre{background:var(--surface);border-radius:8px;padding:8px 10px;font-size:13px;overflow:auto;white-space:pre-wrap}
+.pending .where{font-size:12px;color:var(--muted);margin:6px 0 10px}
+.pending .acts{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.btn{height:40px;border-radius:999px;font-weight:500;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:0 16px}
+.btn.primary{background:var(--accent);color:var(--on-accent)}
+.btn.ghost{border:1px solid var(--line);background:var(--surface)}
+.btn.quiet{background:var(--sunken)}
+.done-note{font-size:13px;color:var(--muted);display:flex;gap:6px;align-items:center;padding:6px 0 0 14px}
+
+.composer{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:10px 10px 8px 14px}
+.composer textarea{width:100%;border:0;resize:none;background:transparent;color:var(--ink);font:inherit;font-size:15px;height:44px;outline:none}
+.composer textarea::placeholder{color:var(--muted)}
+.crow{display:flex;align-items:center;gap:6px}
+.chip{height:30px;padding:0 10px;border-radius:999px;background:var(--sunken);font-size:12px;color:var(--ink);display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+.chip.icon{width:30px;padding:0;justify-content:center}
+.chip .k{color:var(--muted)}
+.send{margin-left:auto;position:relative;width:44px;height:44px;flex:none;border-radius:50%;display:grid;place-items:center}
+.send svg.ring{position:absolute;inset:0;width:44px;height:44px;transform:rotate(-90deg)}
+.send .core{width:34px;height:34px;border-radius:50%;display:grid;place-items:center}
+.send.go .core{background:var(--accent);color:var(--on-accent)}
+.send.stop .core{background:var(--sunken);color:var(--ink)}
+.send.queue .core{background:var(--accent);color:var(--on-accent)}
+.qpill{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);background:var(--sunken);border-radius:999px;padding:3px 10px;margin:0 0 6px 4px}
+
+/* ===== desktop ===== */
+.win{width:1180px;height:780px;background:var(--canvas);display:grid;grid-template-columns:184px 1fr;border:1px solid var(--line);border-radius:14px;overflow:hidden;font-size:13px}
+.nav{display:flex;flex-direction:column;padding:16px 10px 12px;gap:2px}
+.brand{display:flex;align-items:center;gap:8px;font-weight:600;font-size:15px;padding:2px 8px 16px}
+.brand .mark{width:24px;height:24px;border-radius:7px;background:var(--ink);color:var(--canvas);display:grid;place-items:center}
+.brand .mark svg{width:15px;height:15px}
+.navi{display:flex;align-items:center;gap:10px;height:36px;padding:0 10px;border-radius:9px;color:var(--muted);width:100%;text-align:left}
+.navi:hover{background:var(--sunken)}
+.navi[aria-current=page]{background:var(--surface);color:var(--ink);font-weight:500}
+.navi .count{margin-left:auto;font-size:11px;color:var(--wait);background:var(--wait-bg);border-radius:6px;padding:0 6px}
+.nav .grow{flex:1}
+.link{display:flex;align-items:center;gap:8px;padding:10px;margin-top:6px;border-top:1px solid var(--line);font-size:12px;color:var(--muted)}
+.link .dot{color:var(--run)}
+.link b{display:block;color:var(--ink);font-weight:500;font-size:12px}
+.win{grid-template-rows:100%}
+.pane{background:var(--surface);border-left:1px solid var(--line);display:none;min-width:0;min-height:0;grid-template-rows:100%}
+.pane.on{display:grid}
+.ov.pane{grid-template-rows:auto;overflow:auto}
+.col,.chat,.flow,.list,.ibody,.ph-flow,.ph-list,.set{min-height:0}
+.insp{border-left:1px solid var(--line)}
+
+/* workbench */
+.wb{grid-template-columns:268px 1fr 300px}
+.col{min-width:0;display:flex;flex-direction:column;border-right:1px solid var(--line)}
+.col:last-child{border-right:0}
+.lhead{padding:14px 12px 8px;display:grid;gap:8px}
+.lhead .seg{width:100%;display:grid;grid-template-columns:repeat(4,1fr)}
+.lhead .seg button{padding:4px 0;font-size:12px}
+.search{display:flex;align-items:center;gap:8px;height:34px;padding:0 10px;border-radius:9px;background:var(--sunken);color:var(--muted)}
+.search svg{width:16px;height:16px}
+.list{flex:1;overflow:auto;padding:4px 8px}
+.gh{display:flex;align-items:center;justify-content:space-between;font-size:12px;color:var(--muted);padding:12px 6px 4px}
+.row{display:block;width:100%;text-align:left;padding:8px 8px 8px 16px;border-radius:9px}
+.row:hover{background:var(--sunken)}
+.row[aria-current=true]{background:var(--accent-soft)}
+.row .r1{display:flex;align-items:center;gap:8px}
+.row .t{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500}
+.row .r2{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;margin-top:2px}
+.row.spine::before{left:5px;top:8px;bottom:8px}
+.lfoot{padding:10px 12px;border-top:1px solid var(--line)}
+.lfoot .btn{width:100%;height:34px;font-size:13px}
+
+.chat{display:flex;flex-direction:column;min-width:0;background:var(--canvas)}
+.chead{display:flex;align-items:center;gap:10px;padding:12px 18px;border-bottom:1px solid var(--line);background:var(--surface)}
+.chead h3{font-size:15px;font-weight:600}
+.chead .sub{font-size:12px;color:var(--muted)}
+.chead .sp{flex:1}
+.iconbtn{width:32px;height:32px;border-radius:8px;display:grid;place-items:center;color:var(--muted)}
+.iconbtn:hover{background:var(--sunken)}
+.flow{flex:1;overflow:auto;padding:20px 24px 8px}
+.flow .col720{max-width:640px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+.dock{padding:8px 24px 16px}
+.dock .col720{max-width:640px;margin:0 auto;display:grid;gap:10px}
+
+.insp{display:flex;flex-direction:column;min-width:0}
+.tabs{display:flex;gap:2px;padding:10px 10px 0;border-bottom:1px solid var(--line)}
+.tabs button{padding:7px 10px;font-size:13px;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px}
+.tabs button[aria-selected=true]{color:var(--ink);border-color:var(--accent);font-weight:500}
+.ibody{flex:1;overflow:auto;padding:12px}
+.ipanel{display:none}.ipanel.on{display:block}
+.branch{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:9px;background:var(--sunken);font-size:13px}
+.branch .mono{flex:1;font-size:12px}
+.frow{display:flex;align-items:center;gap:8px;padding:6px 4px;font-size:12px}
+.frow .st{width:16px;text-align:center;font-weight:600;color:var(--muted)}
+.frow .p{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.commit{margin-top:12px;display:grid;gap:8px}
+.commit input{height:34px;border:1px solid var(--line);border-radius:9px;background:var(--surface);color:var(--ink);padding:0 10px;font:inherit;font-size:13px}
+.ifoot{border-top:1px solid var(--line);padding:12px;display:grid;gap:10px;font-size:12px}
+.meter{display:flex;align-items:center;gap:10px}
+.bar{flex:1;height:6px;border-radius:6px;background:var(--sunken);overflow:hidden}
+.bar i{display:block;height:100%;width:62%;background:var(--run);border-radius:6px}
+.queue{color:var(--muted)}
+.queue b{color:var(--ink);font-weight:500}
+.term{background:var(--term);color:var(--term-ink);border-radius:10px;padding:10px 12px;font-size:12px;line-height:1.6}
+.term .ok{color:#6CD3C2}.term .dim{color:#8A93A0}
+.tree div{padding:4px 6px;font-size:12px;display:flex;gap:6px;align-items:center;border-radius:6px}
+.tree div:hover{background:var(--sunken)}
+.tree .d{color:var(--muted)}
+
+/* overview */
+.ov{grid-template-columns:1fr 1fr;gap:20px;padding:28px;background:var(--canvas);align-content:start}
+.ov h3{grid-column:1/-1;font-size:20px;font-weight:600}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:20px}
+.pair{display:flex;flex-direction:column;align-items:center;text-align:center;gap:14px}
+.qr{width:220px;height:220px;padding:12px;background:#fff;border-radius:10px;border:1px solid var(--line)}
+.pair .hint{font-size:12px;color:var(--muted)}
+.stat h4,.recent h4{font-size:14px;font-weight:600;margin-bottom:8px}
+.srow{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line)}
+.srow:last-child{border-bottom:0}
+.srow .dot{width:8px;height:8px}
+.srow .n{flex:1}
+.srow .v{color:var(--muted);font-size:12px}
+.srow .btn{height:28px;font-size:12px;padding:0 12px}
+.ok-c{color:var(--run)}.off-c{color:var(--muted)}
+.recent{margin-top:16px}
+.ev{display:flex;gap:10px;padding:8px 0 8px 12px;font-size:13px}
+.ev .time{margin-left:auto}
+
+/* ===== phones ===== */
+.phones{display:flex;flex-wrap:wrap;gap:28px}
+.phone{width:360px;height:760px;background:var(--canvas);border-radius:28px;border:1px solid var(--line);overflow:hidden;display:flex;flex-direction:column;position:relative;font-size:15px}
+.phone figcaption{display:none}
+.cap{font-size:13px;color:var(--muted);margin-top:10px;max-width:360px}
+.sb{height:28px;display:flex;align-items:center;justify-content:space-between;padding:0 20px;font-size:12px;color:var(--muted);flex:none}
+.ph-top{display:flex;align-items:center;gap:8px;padding:6px 12px 6px 16px;flex:none}
+.apptitle{display:flex;align-items:center;gap:4px;font-size:22px;font-weight:600}
+.apptitle svg{width:18px;height:18px;color:var(--muted)}
+.pc{display:inline-flex;align-items:center;gap:6px;margin-left:auto;height:30px;padding:0 10px;border-radius:999px;background:var(--surface);border:1px solid var(--line);font-size:12px}
+.pc .dot{color:var(--run)}
+.ph-search{display:flex;gap:8px;padding:6px 16px 4px;flex:none}
+.ph-search .search{flex:1;height:40px;border-radius:12px;background:var(--surface);border:1px solid var(--line);font-size:14px}
+.ph-search .iconbtn{width:40px;height:40px;border-radius:12px;background:var(--surface);border:1px solid var(--line)}
+.ph-list{flex:1;overflow:auto;padding:0 8px 8px}
+.ph-list .gh{font-size:13px;padding:14px 8px 6px}
+.ph-list .row{padding:10px 10px 10px 18px;border-radius:12px}
+.ph-list .row .t{font-size:15px;font-weight:500}
+.ph-list .row .r2{font-size:13px}
+.ph-list .row.spine::before{left:6px;top:10px;bottom:10px}
+.ph-list .attn{background:var(--surface);border:1px solid var(--wait-line);border-radius:14px;padding:2px}
+.archive{display:flex;align-items:center;gap:8px;padding:14px 10px;color:var(--muted);font-size:14px}
+.tabbar{flex:none;display:grid;grid-template-columns:repeat(3,1fr);border-top:1px solid var(--line);background:var(--surface);padding:6px 0 14px}
+.tabbar button{display:flex;flex-direction:column;align-items:center;gap:3px;font-size:12px;color:var(--muted);position:relative}
+.tabbar button[aria-current=page]{color:var(--ink);font-weight:500}
+.tabbar .app{width:24px;height:24px;border-radius:7px}
+.tabbar .badge{position:absolute;top:0;left:calc(50% + 8px);width:6px;height:6px;border-radius:50%;background:var(--wait)}
+.home{width:120px;height:4px;border-radius:4px;background:var(--muted);opacity:.5;margin:0 auto 8px;flex:none}
+
+.ch-top{display:flex;align-items:center;gap:4px;padding:4px 8px;border-bottom:1px solid var(--line);flex:none}
+.ch-top .ttl{flex:1;min-width:0;padding:0 4px}
+.ch-top .ttl b{display:block;font-size:16px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ch-top .ttl span{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px}
+.ch-top .iconbtn{width:40px;height:40px}
+.ph-flow{flex:1;overflow:auto;padding:14px 14px 6px;display:flex;flex-direction:column;gap:12px;font-size:15px}
+.ph-dock{flex:none;padding:6px 10px 6px;display:grid;gap:8px}
+.ph-dock .composer{border-radius:20px}
+.ph-dock .pending h4{font-size:15px}
+
+.set{flex:1;overflow:auto;padding:0 16px 16px}
+.set h2{font-size:22px;font-weight:600;padding:6px 0 12px}
+.set .search{height:40px;border-radius:12px;background:var(--surface);border:1px solid var(--line);font-size:14px}
+.ovc{display:flex;gap:12px;align-items:center;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px;margin-top:14px;width:100%;text-align:left}
+.ovc .pcic{width:44px;height:44px;border-radius:12px;background:var(--sunken);display:grid;place-items:center}
+.ovc b{display:block;font-weight:600}
+.ovc span{font-size:13px;color:var(--muted);display:flex;align-items:center;gap:6px}
+.sg{font-size:13px;color:var(--muted);padding:20px 4px 8px}
+.sgroup{background:var(--surface);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+.srw{position:relative;display:flex;align-items:center;gap:12px;min-height:52px;padding:0 14px;width:100%;text-align:left}
+.srw+.srw::before{content:"";position:absolute;left:46px;right:0;top:0;border-top:1px solid var(--line)}
+.srw .ic{color:var(--muted)}
+.srw .l{flex:1}
+.srw .val{color:var(--muted);font-size:13px}
+.srw .gt{width:16px;height:16px;color:var(--muted)}
+
+/* tokens */
+.tokens{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
+.sw{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:10px;font-size:12px}
+.sw i{display:block;height:36px;border-radius:8px;margin-bottom:8px;border:1px solid var(--line)}
+.sw b{display:block;font-weight:500;font-size:13px}
+.sw span{color:var(--muted)}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></symbol>
+  <symbol id="i-filter" viewBox="0 0 24 24"><path d="M4 7h16M7 12h10M10 17h4"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="m14.5 5-7 7 7 7"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="m7 10 5 5 5-5"/></symbol>
+  <symbol id="i-right" viewBox="0 0 24 24"><path d="m10 6 6 6-6 6"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="6" cy="12" r=".9"/><circle cx="12" cy="12" r=".9"/><circle cx="18" cy="12" r=".9"/></symbol>
+  <symbol id="i-desk" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="11.5" rx="2"/><path d="M9 20h6M12 16v4"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 19V6M6.5 11.5 12 6l5.5 5.5"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="7.5" y="7.5" width="9" height="9" rx="1.5" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="4" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M5 5.5h14a1.5 1.5 0 0 1 1.5 1.5v8.5A1.5 1.5 0 0 1 19 17h-8l-4.5 3.5V17H5a1.5 1.5 0 0 1-1.5-1.5V7A1.5 1.5 0 0 1 5 5.5Z"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6.5 16V11a5.5 5.5 0 0 1 11 0v5l1.5 2h-14l1.5-2ZM10 20.5h4"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8.5" r="3.5"/><path d="M5 20c.8-3.6 3.6-5.5 7-5.5s6.2 1.9 7 5.5"/></symbol>
+  <symbol id="i-log" viewBox="0 0 24 24"><path d="M5 6h14M5 10h14M5 14h9M5 18h6"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2Z"/></symbol>
+  <symbol id="i-branch" viewBox="0 0 24 24"><circle cx="7" cy="6" r="2"/><circle cx="7" cy="18" r="2"/><circle cx="17" cy="8" r="2"/><path d="M7 8v8M17 10c0 4-4 4-8.5 6.5"/></symbol>
+  <symbol id="i-sync" viewBox="0 0 24 24"><path d="M19 8a7.5 7.5 0 0 0-13.5 1M5 16a7.5 7.5 0 0 0 13.5-1M19 4v4h-4M5 20v-4h4"/></symbol>
+  <symbol id="i-qr" viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><path d="M14 14h2v2M18 14h2M14 18v2h2M18 18h2v2"/></symbol>
+  <symbol id="i-net" viewBox="0 0 24 24"><circle cx="12" cy="5.5" r="2"/><circle cx="5.5" cy="18" r="2"/><circle cx="18.5" cy="18" r="2"/><path d="M11 7.3 6.5 16.2M13 7.3l4.5 8.9M7.5 18h9"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 3v1.5M12 19.5V21M3 12h1.5M19.5 12H21M5.6 5.6l1 1M17.4 17.4l1 1M5.6 18.4l1-1M17.4 6.6l1-1"/></symbol>
+  <symbol id="i-pet" viewBox="0 0 24 24"><path d="M7 9.5 5.5 5 9 7.5M17 9.5 18.5 5 15 7.5"/><path d="M6 12.5a6 5.5 0 0 0 12 0 6 5.5 0 0 0-12 0Z"/><path d="M10 12.5h.01M14 12.5h.01"/></symbol>
+  <symbol id="i-term" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="m7.5 10 2.5 2-2.5 2M12.5 14.5H16"/></symbol>
+  <symbol id="a-claude" viewBox="0 0 24 24"><rect width="24" height="24" rx="6" fill="#D97757"/><g stroke="#fff" stroke-width="2" stroke-linecap="round"><path d="M12 5.5v13M5.5 12h13M7.4 7.4l9.2 9.2M16.6 7.4l-9.2 9.2"/></g></symbol>
+  <symbol id="a-codex" viewBox="0 0 24 24"><rect width="24" height="24" rx="6" fill="#1F2329"/><path d="m7.5 9 3 3-3 3M12.5 15.5h4" stroke="#fff" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="a-deepseek" viewBox="0 0 24 24"><rect width="24" height="24" rx="6" fill="#4D6BFE"/><path d="M5.5 13.5c2.2 3.2 7.8 3.6 10.6.4 1.2-1.3 1.6-3 1.4-4.6l1.5-1.6-2.3.2c-.9 2.4-3.6 3.5-6.2 2.4" stroke="#fff" stroke-width="1.7" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+</svg>
+
+<header class="top">
+  <h1>coding远程 界面重设计原型</h1>
+  <p>示例数据，仅展示布局与状态表达。配套方案见 ui-redesign-plan.md</p>
+  <div class="seg" role="group" aria-label="显示模式">
+    <button aria-pressed="true" data-theme-set="light">浅色</button>
+    <button aria-pressed="false" data-theme-set="dark">深色</button>
+  </div>
+</header>
+
+<main>
+<!-- ================= DESKTOP ================= -->
+<section class="block">
+  <h2>桌面端 · 工作台</h2>
+  <p class="note">对话常驻中间，文件、Git、终端等移到右侧检查器。待审批卡在输入区上方，是这一屏唯一的主色实心按钮；任务执行中且输入为空时，发送键是“停止”。左侧导航可切到概览查看。</p>
+  <div class="fit" data-w="1180"><div class="scale">
+  <div class="win" id="desk">
+    <nav class="nav" aria-label="桌面导航">
+      <div class="brand"><span class="mark"><svg class="i"><use href="#i-desk"/></svg></span>coding远程</div>
+      <button class="navi" data-page="ov"><svg class="i"><use href="#i-grid"/></svg>概览</button>
+      <button class="navi" data-page="wb" aria-current="page"><svg class="i"><use href="#i-chat"/></svg>工作台</button>
+      <button class="navi"><svg class="i"><use href="#i-bell"/></svg>通知中心<span class="count">2</span></button>
+      <button class="navi"><svg class="i"><use href="#i-user"/></svg>账号与模型</button>
+      <button class="navi"><svg class="i"><use href="#i-log"/></svg>日志</button>
+      <div class="grow"></div>
+      <button class="navi"><svg class="i"><use href="#i-gear"/></svg>应用设置</button>
+      <button class="link" data-page="ov"><span class="dot"></span><span><b>手机已连接</b>临时 HTTPS，延迟 86 ms</span></button>
+    </nav>
+
+    <!-- workbench -->
+    <div class="pane wb on" id="pane-wb">
+      <div class="col">
+        <div class="lhead">
+          <div class="seg" role="tablist" aria-label="客户端">
+            <button aria-pressed="true">全部</button><button aria-pressed="false">Claude</button><button aria-pressed="false">Codex</button><button aria-pressed="false">DeepSeek</button>
+          </div>
+          <div class="search"><svg class="i"><use href="#i-search"/></svg>搜索会话或项目</div>
+        </div>
+        <div class="list">
+          <div class="gh">需要你处理</div>
+          <button class="row spine wait"><div class="r1"><svg class="app"><use href="#a-codex"/></svg><span class="t">整理项目交接文档</span><span class="tag wait">待审批</span></div><div class="r2">产品开发</div></button>
+          <div class="gh">产品开发<span>按项目</span></div>
+          <button class="row spine run" aria-current="true"><div class="r1"><svg class="app"><use href="#a-codex"/></svg><span class="t">检查登录流程异常</span><span class="tag run">3/5</span></div><div class="r2">产品开发</div></button>
+          <button class="row spine"><div class="r1"><svg class="app"><use href="#a-claude"/></svg><span class="t">补充 API 接口文档</span><span class="time">10/02</span></div><div class="r2">产品开发</div></button>
+          <button class="row spine"><div class="r1"><svg class="app"><use href="#a-claude"/></svg><span class="t">首页文案与导航调整</span><span class="time">09/28</span></div><div class="r2">产品开发</div></button>
+          <div class="gh">开发服务器</div>
+          <button class="row spine err"><div class="r1"><svg class="app"><use href="#a-deepseek"/></svg><span class="t">验证部署后的服务状态</span><span class="tag err">出错</span></div><div class="r2">开发服务器</div></button>
+          <button class="row spine"><div class="r1"><svg class="app"><use href="#a-codex"/></svg><span class="t">整理性能测试结果</span><span class="time">昨天</span></div><div class="r2">开发服务器</div></button>
+        </div>
+        <div class="lfoot"><button class="btn ghost"><svg class="i"><use href="#i-plus"/></svg>新建会话</button></div>
+      </div>
+
+      <div class="chat">
+        <div class="chead">
+          <svg class="app" style="width:22px;height:22px"><use href="#a-codex"/></svg>
+          <div><h3>检查登录流程异常</h3><div class="sub">产品开发　D:\work\portal</div></div>
+          <span class="tag run">执行中</span>
+          <span class="sp"></span>
+          <button class="iconbtn" aria-label="更多"><svg class="i"><use href="#i-more"/></svg></button>
+        </div>
+        <div class="flow"><div class="col720">
+          <div class="msg-user">登录后偶尔会跳回登录页，帮我查一下原因，并补一个回归测试。</div>
+          <div class="reply spine">
+            <div class="who"><svg class="app" style="width:16px;height:16px"><use href="#a-codex"/></svg>Codex</div>
+            <p>找到原因了：刷新令牌的请求和页面跳转同时发生，旧令牌在跳转前就被清掉。我把 <code class="inline">auth/session.ts</code> 里的刷新顺序改成先换新令牌、再清旧令牌。</p>
+            <button class="exec" aria-expanded="false"><svg class="i chev" style="width:16px;height:16px"><use href="#i-right"/></svg>执行过程 8 步，2 个文件<span class="num"><span class="add">+31</span><span class="del">−9</span></span></button>
+            <ul class="steps"><li><svg class="i"><use href="#i-check"/></svg>读取 src/auth/session.ts</li><li><svg class="i"><use href="#i-check"/></svg>定位刷新与跳转的竞态</li><li><svg class="i"><use href="#i-check"/></svg>修改刷新顺序</li></ul>
+          </div>
+          <div class="msg-user">好，测试也补上。</div>
+          <div class="reply spine run">
+            <div class="who"><svg class="app" style="width:16px;height:16px"><use href="#a-codex"/></svg>Codex</div>
+            <p>新增 <code class="inline">tests/auth/refresh.test.ts</code>，模拟跳转过程中令牌到期的情况。接下来运行认证相关的测试。</p>
+            <div class="live"><span class="dot"></span>正在执行第 3 步：运行测试，等待你的确认</div>
+          </div>
+        </div></div>
+        <div class="dock"><div class="col720">
+          <div class="pending" data-pending>
+            <div class="ph">需要你确认<span class="more">更多选项</span></div>
+            <h4>允许运行此命令？</h4>
+            <pre class="mono">npm run test:auth</pre>
+            <div class="where">在 D:\work\portal 中运行</div>
+            <div class="acts"><button class="btn ghost" data-deny>拒绝</button><button class="btn primary" data-allow>允许本次</button></div>
+          </div>
+          <div class="composer">
+            <textarea placeholder="继续说点什么，执行中会加入队列" aria-label="消息"></textarea>
+            <div class="crow">
+              <button class="chip icon" aria-label="添加附件"><svg class="i" style="width:16px;height:16px"><use href="#i-plus"/></svg></button>
+              <button class="chip">gpt-5.1<span class="k">高</span></button>
+              <button class="chip">默认权限</button>
+              <button class="chip">2 个插件</button>
+              <button class="send stop" aria-label="停止任务，上下文已用 62%" title="上下文 124k / 200k">
+                <svg class="ring" viewBox="0 0 44 44"><circle cx="22" cy="22" r="20.5" fill="none" stroke="var(--line)" stroke-width="2.5"/><circle cx="22" cy="22" r="20.5" fill="none" stroke="var(--run)" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="128.8" stroke-dashoffset="48.9"/></svg>
+                <span class="core"><svg class="i" style="width:18px;height:18px"><use href="#i-stop"/></svg></span>
+              </button>
+            </div>
+          </div>
+        </div></div>
+      </div>
+
+      <aside class="col insp" aria-label="检查器">
+        <div class="tabs" role="tablist">
+          <button role="tab" aria-selected="false" data-tab="files">文件</button>
+          <button role="tab" aria-selected="true" data-tab="git">Git</button>
+          <button role="tab" aria-selected="false" data-tab="term">终端</button>
+          <button role="tab" aria-selected="false" data-tab="agents">智能体</button>
+          <button role="tab" aria-selected="false" data-tab="side">侧聊</button>
+        </div>
+        <div class="ibody">
+          <div class="ipanel" data-panel="files"><div class="tree">
+            <div class="d"><svg class="i" style="width:16px;height:16px"><use href="#i-folder"/></svg>src</div>
+            <div style="padding-left:24px">auth/session.ts</div>
+            <div style="padding-left:24px">auth/guard.ts</div>
+            <div class="d"><svg class="i" style="width:16px;height:16px"><use href="#i-folder"/></svg>tests</div>
+            <div style="padding-left:24px">auth/refresh.test.ts</div>
+            <div>package.json</div><div>README.md</div>
+          </div></div>
+          <div class="ipanel on" data-panel="git">
+            <div class="branch"><svg class="i" style="width:16px;height:16px"><use href="#i-branch"/></svg><span class="mono">fix/session-refresh</span><button class="iconbtn" aria-label="获取、拉取或推送" style="width:26px;height:26px"><svg class="i" style="width:16px;height:16px"><use href="#i-sync"/></svg></button></div>
+            <div class="gh">未暂存 2</div>
+            <div class="frow"><span class="st mono">M</span><span class="p">src/auth/session.ts</span><span class="add">+14</span><span class="del">−9</span></div>
+            <div class="frow"><span class="st mono">A</span><span class="p">tests/auth/refresh.test.ts</span><span class="add">+17</span></div>
+            <div class="gh">已暂存 1</div>
+            <div class="frow"><span class="st mono">M</span><span class="p">package.json</span><span class="add">+1</span><span class="del">−1</span></div>
+            <div class="commit"><input placeholder="提交说明" aria-label="提交说明"><button class="btn quiet" style="height:34px">提交 1 个文件</button></div>
+          </div>
+          <div class="ipanel" data-panel="term">
+            <div class="seg" style="margin-bottom:10px"><button aria-pressed="true">本机</button><button aria-pressed="false">WSL</button><button aria-pressed="false">SSH</button></div>
+            <div class="term mono"><span class="dim">D:\work\portal&gt;</span> git status --short<br> M src/auth/session.ts<br>?? tests/auth/refresh.test.ts<br><span class="ok">完成，用时 0.4 秒</span></div>
+            <p class="time" style="margin-top:8px">只有点击运行才会执行，切换页签不会运行命令。</p>
+          </div>
+          <div class="ipanel" data-panel="agents"><p class="time">这个会话没有关联的智能体。</p></div>
+          <div class="ipanel" data-panel="side"><p class="time">选择一个已有会话作为侧聊，主会话保持在原位置。</p></div>
+        </div>
+        <div class="ifoot">
+          <div class="meter"><span>上下文</span><span class="bar"><i></i></span><span>124k / 200k</span></div>
+          <div class="queue">队列 1 条　<b>顺便把 README 的登录说明更新一下</b></div>
+        </div>
+      </aside>
+    </div>
+
+    <!-- overview -->
+    <div class="pane ov" id="pane-ov">
+      <h3>概览</h3>
+      <div class="card pair">
+        <div class="seg"><button aria-pressed="true">临时扫码</button><button aria-pressed="false">Tailscale 永久</button></div>
+        <svg class="qr" id="qr" viewBox="0 0 29 29" shape-rendering="crispEdges" aria-label="配对二维码示例"></svg>
+        <div><b>用手机 App 扫码配对</b><div class="hint">4:12 后失效，每次只能配对一台手机</div></div>
+        <button class="btn ghost">刷新二维码</button>
+      </div>
+      <div>
+        <div class="card stat">
+          <h4>现在能用吗</h4>
+          <div class="srow"><span class="dot ok-c"></span><span class="n">网关</span><span class="v">运行中，端口 8787</span></div>
+          <div class="srow"><span class="dot ok-c"></span><span class="n">公网入口</span><span class="v">临时 HTTPS 已就绪</span></div>
+          <div class="srow"><span class="dot ok-c"></span><span class="n">手机 Pixel 8</span><span class="v">已连接，2 分钟前活动</span></div>
+          <div class="srow"><svg class="app"><use href="#a-claude"/></svg><span class="n">Claude</span><span class="v">运行中</span></div>
+          <div class="srow"><svg class="app"><use href="#a-codex"/></svg><span class="n">Codex</span><span class="v">运行中</span></div>
+          <div class="srow"><svg class="app"><use href="#a-deepseek"/></svg><span class="n">DeepSeek Harness</span><span class="v">未启动</span><button class="btn ghost">启动</button></div>
+        </div>
+        <div class="card recent">
+          <h4>最近活动</h4>
+          <div class="ev spine wait">整理项目交接文档 等待审批<span class="time">10:41</span></div>
+          <div class="ev spine err">验证部署后的服务状态 运行失败<span class="time">10:12</span></div>
+          <div class="ev spine">首页文案与导航调整 已完成<span class="time">09:58</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  </div></div>
+</section>
+
+<!-- ================= ANDROID ================= -->
+<section class="block">
+  <h2>安卓端</h2>
+  <p class="note">四个关键页面。左缘的状态脊在列表和会话里含义相同：青色流动表示执行中，琥珀表示需要你处理，红色表示出错。第二屏可点“允许本次”，第三屏可点“执行过程”展开。</p>
+  <div class="phones">
+
+  <!-- 1. list -->
+  <div>
+  <div class="phone">
+    <div class="sb"><span>10:42</span><span>5G 86%</span></div>
+    <div class="ph-top">
+      <button class="apptitle">Codex<svg class="i"><use href="#i-down"/></svg></button>
+      <button class="pc"><span class="dot"></span>MMM-PC</button>
+      <button class="iconbtn" aria-label="设置"><svg class="i"><use href="#i-gear"/></svg></button>
+    </div>
+    <div class="ph-search">
+      <div class="search"><svg class="i"><use href="#i-search"/></svg>搜索会话或项目</div>
+      <button class="iconbtn" aria-label="分组与筛选"><svg class="i"><use href="#i-filter"/></svg></button>
+    </div>
+    <div class="ph-list">
+      <div class="gh">需要你处理</div>
+      <div class="attn"><button class="row spine wait"><div class="r1"><span class="t">整理项目交接文档</span><span class="tag wait">待审批</span></div><div class="r2">产品开发</div></button></div>
+      <div class="gh">产品开发<span>按项目</span></div>
+      <button class="row spine run"><div class="r1"><span class="t">检查登录流程异常</span><span class="tag run">执行中 3/5</span></div><div class="r2">产品开发</div></button>
+      <button class="row spine"><div class="r1"><span class="t">补充 API 接口文档</span><span class="time">10/02</span></div><div class="r2">产品开发</div></button>
+      <button class="row spine"><div class="r1"><span class="t">首页文案与导航调整</span><span class="time">09/28</span></div><div class="r2">产品开发</div></button>
+      <div class="gh">开发服务器</div>
+      <button class="row spine"><div class="r1"><span class="t">整理性能测试结果</span><span class="time">昨天</span></div><div class="r2">开发服务器</div></button>
+      <button class="row spine"><div class="r1"><span class="t">更新项目说明和运行步骤</span><span class="time">10/01</span></div><div class="r2">开发服务器</div></button>
+      <button class="archive"><svg class="i"><use href="#i-folder"/></svg>归档 4</button>
+    </div>
+    <div class="tabbar">
+      <button><svg class="app"><use href="#a-claude"/></svg>Claude</button>
+      <button aria-current="page"><svg class="app"><use href="#a-codex"/></svg>Codex<span class="badge" aria-label="有待处理"></span></button>
+      <button><svg class="app"><use href="#a-deepseek"/></svg>DeepSeek</button>
+    </div>
+  </div>
+  <p class="cap">会话列表：标题即应用切换，电脑芯片显示连接；筛选合并为一个按钮；待处理的会话置顶成组。</p>
+  </div>
+
+  <!-- 2. conversation waiting -->
+  <div>
+  <div class="phone">
+    <div class="sb"><span>10:42</span><span>5G 86%</span></div>
+    <div class="ch-top">
+      <button class="iconbtn" aria-label="返回"><svg class="i"><use href="#i-back"/></svg></button>
+      <div class="ttl"><b>整理项目交接文档</b><span><span class="dot" style="color:var(--wait)"></span>产品开发　等待你确认</span></div>
+      <button class="iconbtn" aria-label="工作台"><svg class="i"><use href="#i-folder"/></svg></button>
+      <button class="iconbtn" aria-label="会话信息"><svg class="i"><use href="#i-more"/></svg></button>
+    </div>
+    <div class="ph-flow">
+      <div class="msg-user">把交接文档整理一下，跑一遍文档里的示例确认能用。</div>
+      <div class="reply spine wait">
+        <div class="who"><svg class="app" style="width:16px;height:16px"><use href="#a-codex"/></svg>Codex</div>
+        <p>文档已经按“启动、核心流程、部署”三部分重排。下一步验证文档里的示例命令。</p>
+        <button class="exec" aria-expanded="false"><svg class="i chev" style="width:16px;height:16px"><use href="#i-right"/></svg>执行过程 6 步，1 个文件<span class="num"><span class="add">+42</span><span class="del">−18</span></span></button>
+        <ul class="steps"><li><svg class="i"><use href="#i-check"/></svg>读取 docs/handover.md</li><li><svg class="i"><use href="#i-check"/></svg>重排章节</li></ul>
+      </div>
+      <div class="done-note" hidden data-note><svg class="i" style="width:16px;height:16px;color:var(--run)"><use href="#i-check"/></svg>已允许运行 npm run test:docs</div>
+    </div>
+    <div class="ph-dock">
+      <div class="pending" data-pending>
+        <div class="ph">需要你确认 1/1<span class="more">更多选项</span></div>
+        <h4>允许运行此命令？</h4>
+        <pre class="mono">npm run test:docs</pre>
+        <div class="where">在 /projects/team-workspace 中运行</div>
+        <div class="acts"><button class="btn ghost" data-deny>拒绝</button><button class="btn primary" data-allow>允许本次</button></div>
+      </div>
+      <div class="composer">
+        <textarea placeholder="继续说点什么" aria-label="消息"></textarea>
+        <div class="crow">
+          <button class="chip icon" aria-label="添加附件"><svg class="i" style="width:16px;height:16px"><use href="#i-plus"/></svg></button>
+          <button class="chip">gpt-5.1<span class="k">高</span></button>
+          <button class="chip">默认权限</button>
+          <button class="send stop" aria-label="停止任务，上下文已用 38%">
+            <svg class="ring" viewBox="0 0 44 44"><circle cx="22" cy="22" r="20.5" fill="none" stroke="var(--line)" stroke-width="2.5"/><circle cx="22" cy="22" r="20.5" fill="none" stroke="var(--run)" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="128.8" stroke-dashoffset="79.9"/></svg>
+            <span class="core"><svg class="i" style="width:18px;height:18px"><use href="#i-stop"/></svg></span>
+          </button>
+        </div>
+      </div>
+    </div>
+    <div class="home"></div>
+  </div>
+  <p class="cap">会话页：审批从执行详情里拿出来，固定在输入区上方；值胶囊直接写当前模型和权限。</p>
+  </div>
+
+  <!-- 3. running, queue -->
+  <div>
+  <div class="phone">
+    <div class="sb"><span>10:44</span><span>5G 85%</span></div>
+    <div class="ch-top">
+      <button class="iconbtn" aria-label="返回"><svg class="i"><use href="#i-back"/></svg></button>
+      <div class="ttl"><b>检查登录流程异常</b><span><span class="dot" style="color:var(--run)"></span>产品开发　执行中</span></div>
+      <button class="iconbtn" aria-label="工作台"><svg class="i"><use href="#i-folder"/></svg></button>
+      <button class="iconbtn" aria-label="会话信息"><svg class="i"><use href="#i-more"/></svg></button>
+    </div>
+    <div class="ph-flow">
+      <div class="msg-user">登录后偶尔会跳回登录页，帮我查一下原因。</div>
+      <div class="reply spine run">
+        <div class="who"><svg class="app" style="width:16px;height:16px"><use href="#a-codex"/></svg>Codex</div>
+        <p>刷新令牌和页面跳转同时发生，旧令牌在跳转前就被清掉了。正在修改刷新顺序并补测试。</p>
+        <button class="exec" aria-expanded="true"><svg class="i chev" style="width:16px;height:16px"><use href="#i-right"/></svg>执行过程 3/5 步<span class="num"><span class="add">+31</span><span class="del">−9</span></span></button>
+        <ul class="steps">
+          <li><svg class="i"><use href="#i-check"/></svg>读取 src/auth/session.ts</li>
+          <li><svg class="i"><use href="#i-check"/></svg>修改刷新顺序</li>
+          <li class="now"><span class="dot" style="color:var(--run);margin:7px 5px 0 5px"></span>运行 npm run test:auth</li>
+          <li style="opacity:.6"><span style="width:16px"></span>更新说明</li>
+        </ul>
+      </div>
+    </div>
+    <div class="ph-dock">
+      <div><span class="qpill">队列 1 条，任务结束后发送</span></div>
+      <div class="composer">
+        <textarea aria-label="消息">顺便把 README 的登录说明也更新一下</textarea>
+        <div class="crow">
+          <button class="chip icon" aria-label="添加附件"><svg class="i" style="width:16px;height:16px"><use href="#i-plus"/></svg></button>
+          <button class="chip">gpt-5.1<span class="k">高</span></button>
+          <button class="chip">默认权限</button>
+          <button class="send queue" aria-label="加入队列，上下文已用 78%">
+            <svg class="ring" viewBox="0 0 44 44"><circle cx="22" cy="22" r="20.5" fill="none" stroke="var(--line)" stroke-width="2.5"/><circle cx="22" cy="22" r="20.5" fill="none" stroke="var(--wait)" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="128.8" stroke-dashoffset="28.3"/></svg>
+            <span class="core"><svg class="i" style="width:18px;height:18px"><use href="#i-plus"/></svg></span>
+          </button>
+        </div>
+      </div>
+    </div>
+    <div class="home"></div>
+  </div>
+  <p class="cap">执行中：执行过程是回复下的折叠行；有输入时发送键变为“加入队列”，上下文超过 75% 时外环转琥珀。</p>
+  </div>
+
+  <!-- 4. settings -->
+  <div>
+  <div class="phone">
+    <div class="sb"><span>10:45</span><span>5G 85%</span></div>
+    <div class="ch-top" style="border-bottom:0">
+      <button class="iconbtn" aria-label="返回"><svg class="i"><use href="#i-back"/></svg></button>
+    </div>
+    <div class="set">
+      <h2>设置</h2>
+      <div class="search"><svg class="i"><use href="#i-search"/></svg>搜索设置</div>
+      <button class="ovc">
+        <span class="pcic"><svg class="i"><use href="#i-desk"/></svg></span>
+        <span style="flex:1"><b>已连接 MMM-PC</b><span><span class="dot" style="color:var(--run)"></span>临时 HTTPS，延迟 86 ms</span></span>
+        <svg class="i gt" style="color:var(--muted)"><use href="#i-right"/></svg>
+      </button>
+      <div class="sg">连接</div>
+      <div class="sgroup">
+        <button class="srw"><svg class="i ic"><use href="#i-qr"/></svg><span class="l">扫描电脑二维码</span><svg class="i gt"><use href="#i-right"/></svg></button>
+        <button class="srw"><svg class="i ic"><use href="#i-net"/></svg><span class="l">Tailscale 永久连接</span><span class="val">未绑定</span><svg class="i gt"><use href="#i-right"/></svg></button>
+      </div>
+      <div class="sg">外观与交互</div>
+      <div class="sgroup">
+        <button class="srw"><svg class="i ic"><use href="#i-sun"/></svg><span class="l">外观与阅读</span><span class="val">跟随系统</span><svg class="i gt"><use href="#i-right"/></svg></button>
+      </div>
+      <div class="sg">通知与宠物</div>
+      <div class="sgroup">
+        <button class="srw"><svg class="i ic"><use href="#i-bell"/></svg><span class="l">任务通知</span><span class="val">已关闭</span><svg class="i gt"><use href="#i-right"/></svg></button>
+        <button class="srw"><svg class="i ic"><use href="#i-pet"/></svg><span class="l">宠物与悬浮窗</span><span class="val">线条小狗</span><svg class="i gt"><use href="#i-right"/></svg></button>
+        <button class="srw"><svg class="i ic"><use href="#i-log"/></svg><span class="l">通知记录</span><svg class="i gt"><use href="#i-right"/></svg></button>
+      </div>
+      <div class="sg">电脑</div>
+      <div class="sgroup">
+        <button class="srw"><svg class="i ic"><use href="#i-term"/></svg><span class="l">桌面应用</span><span class="val">2 个运行中</span><svg class="i gt"><use href="#i-right"/></svg></button>
+      </div>
+    </div>
+    <div class="home"></div>
+  </div>
+  <p class="cap">设置：概览卡取代“已连接电脑”行，图标去掉彩色底，行尾显示当前值。</p>
+  </div>
+  </div>
+</section>
+
+<!-- ================= TOKENS ================= -->
+<section class="block">
+  <h2>色值</h2>
+  <p class="note">两端共用一份。切换右上角的显示模式可以看到深色对应值。</p>
+  <div class="tokens" id="tokens"></div>
+</section>
+</main>
+
+<script>
+(function(){
+  const root=document.documentElement;
+  // theme toggle
+  document.querySelectorAll('[data-theme-set]').forEach(b=>b.addEventListener('click',()=>{
+    root.dataset.theme=b.dataset.themeSet;
+    document.querySelectorAll('[data-theme-set]').forEach(x=>x.setAttribute('aria-pressed',x===b));
+    tokens();
+  }));
+  // scale desktop frame to fit
+  function fit(){document.querySelectorAll('.fit').forEach(f=>{
+    const w=+f.dataset.w,s=f.firstElementChild,inner=s.firstElementChild;
+    const k=Math.min(1,f.parentElement.clientWidth/w);
+    s.style.transform='scale('+k+')';f.style.height=(inner.offsetHeight*k)+'px';f.style.width=(w*k)+'px';
+  })}
+  addEventListener('resize',fit);fit();
+  // desktop pages
+  document.querySelectorAll('[data-page]').forEach(b=>b.addEventListener('click',()=>{
+    const p=b.dataset.page;
+    document.querySelectorAll('.pane').forEach(x=>x.classList.toggle('on',x.id==='pane-'+p));
+    document.querySelectorAll('.navi[data-page]').forEach(x=>x.toggleAttribute('aria-current',x.dataset.page===p));
+    document.querySelectorAll('.navi[aria-current]').forEach(x=>x.setAttribute('aria-current','page'));
+  }));
+  // inspector tabs
+  document.querySelectorAll('[data-tab]').forEach(t=>t.addEventListener('click',()=>{
+    document.querySelectorAll('[data-tab]').forEach(x=>x.setAttribute('aria-selected',x===t));
+    document.querySelectorAll('[data-panel]').forEach(x=>x.classList.toggle('on',x.dataset.panel===t.dataset.tab));
+  }));
+  // segmented groups (visual only)
+  document.querySelectorAll('.lhead .seg button,.pair .seg button,.ipanel .seg button').forEach(b=>b.addEventListener('click',()=>{
+    b.parentElement.querySelectorAll('button').forEach(x=>x.setAttribute('aria-pressed',x===b));
+  }));
+  // execution rows
+  document.querySelectorAll('.exec').forEach(e=>e.addEventListener('click',()=>e.setAttribute('aria-expanded',e.getAttribute('aria-expanded')!=='true')));
+  // pending cards
+  document.querySelectorAll('[data-pending]').forEach(card=>{
+    const scope=card.closest('.phone,.chat');
+    const resolve=(ok)=>{
+      const cmd=card.querySelector('pre').textContent;
+      card.hidden=true;
+      let note=scope.querySelector('[data-note]');
+      if(!note){note=document.createElement('div');note.className='done-note';scope.querySelector('.col720').appendChild(note);}
+      note.hidden=false;
+      note.innerHTML='<svg class="i" style="width:16px;height:16px;color:var(--'+(ok?'run':'error')+')"><use href="#i-'+(ok?'check':'stop')+'"/></svg>'+(ok?'已允许运行 ':'已拒绝运行 ')+cmd;
+      const sp=scope.querySelector('.reply.spine.wait');if(sp){sp.classList.remove('wait');if(ok)sp.classList.add('run');}
+    };
+    card.querySelector('[data-allow]').addEventListener('click',()=>resolve(true));
+    card.querySelector('[data-deny]').addEventListener('click',()=>resolve(false));
+  });
+  // pseudo QR (illustrative only)
+  const qr=document.getElementById('qr');let seed=7,cells='';
+  const rnd=()=>(seed=(seed*16807)%2147483647)/2147483647;
+  const finder=(x,y)=>{for(const[dx,dy]of[[0,0],[22,0],[0,22]]){const a=x-dx,b=y-dy;if(a>=0&&a<7&&b>=0&&b<7)return(a===0||a===6||b===0||b===6||(a>1&&a<5&&b>1&&b<5))?1:0;if(a>=-1&&a<8&&b>=-1&&b<8)return 0}return-1};
+  for(let y=0;y<29;y++)for(let x=0;x<29;x++){const f=finder(x,y);if(f===1||(f===-1&&rnd()>.52))cells+='M'+x+' '+y+'h1v1h-1z'}
+  qr.innerHTML='<path fill="#1B2230" d="'+cells+'"/>';
+  // token swatches
+  function tokens(){
+    const names=[['canvas','底'],['surface','面'],['sunken','凹'],['line','线'],['ink','墨'],['muted','次墨'],['accent','主色'],['accent-soft','主色浅底'],['run','执行中'],['wait','需要你'],['wait-bg','需要你底'],['error','出错']];
+    const cs=getComputedStyle(root);
+    document.getElementById('tokens').innerHTML=names.map(([k,n])=>{const v=cs.getPropertyValue('--'+k).trim();return '<div class="sw"><i style="background:'+v+'"></i><b>'+n+'</b><span class="mono">'+v+'</span></div>'}).join('');
+  }
+  tokens();
+})();
+</script>
+</body>
+</html>

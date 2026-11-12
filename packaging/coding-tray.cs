@@ -15,6 +15,7 @@ class CodingTray {
     }
     [STAThread] static int Main(string[] args) {
         Console.OutputEncoding=new UTF8Encoding(false);
+        Console.InputEncoding=new UTF8Encoding(false);
         if(args.Length==1&&args[0]=="--self-check") {using(var menu=Menu()){if(menu.Items.Count!=5)return 1;}Emit("tray menu OK");return 0;}
         if(args.Length!=1)return 1;
         Application.EnableVisualStyles();
@@ -22,7 +23,8 @@ class CodingTray {
             var handle=dispatcher.Handle;
             tray.Icon=icon;tray.Text="coding远程 · 后台服务运行中";tray.ContextMenuStrip=menu;
             tray.DoubleClick+=(s,e)=>Emit("show");tray.Visible=true;Emit("ready");
-            var reader=new Thread(()=>{while(Console.ReadLine()!=null){}try{dispatcher.BeginInvoke(new Action(Application.ExitThread));}catch{}});
+            string notice="show";tray.BalloonTipClicked+=(s,e)=>Emit(notice);
+            var reader=new Thread(()=>{string line;while((line=Console.ReadLine())!=null){try{string[] fields=line.Split('\t');if(fields.Length==5&&fields[0]=="notify"){string title=Encoding.UTF8.GetString(Convert.FromBase64String(fields[1])),body=Encoding.UTF8.GetString(Convert.FromBase64String(fields[2])),target=fields[3]+":"+fields[4];dispatcher.BeginInvoke(new Action(()=>{notice="notice:"+target;tray.ShowBalloonTip(7000,title.Length>63?title.Substring(0,63):title,body.Length>250?body.Substring(0,250):body,ToolTipIcon.Info);}));}}catch{}}try{dispatcher.BeginInvoke(new Action(Application.ExitThread));}catch{}});
             reader.IsBackground=true;reader.Start();
             Application.Run();tray.Visible=false;
         }

@@ -33,7 +33,11 @@ class GitProjects:
     def root(self, cwd):
         path=Path(cwd).resolve()
         if not path.is_dir():raise ValueError('当前会话的项目目录不可用')
-        value,_=self.run(path,['rev-parse','--show-toplevel'])
+        try:value,_=self.run(path,['rev-parse','--show-toplevel'])
+        except ValueError as error:
+            if 'not a git repository' in str(error).lower():
+                raise ValueError('此目录尚未使用 Git；请打开已有 Git 仓库的会话，或在电脑初始化此项目。') from error
+            raise
         return Path(value.strip()).resolve()
 
     def files(self, root):

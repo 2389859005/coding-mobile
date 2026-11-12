@@ -1,6 +1,5 @@
 package io.github.abyxs.codingremote;
 import android.content.*;
-import android.app.AlertDialog;
 import android.graphics.*;
 import android.graphics.drawable.*;
 import android.os.*;
@@ -44,8 +43,9 @@ final class StatusOverlay {
     private static volatile StatusOverlay live;
     /** Set while a manual prime is in flight: see render()'s foreground gate. */
     private boolean forced;
-    private int background=0xffeaf1e9,foreground=0xff27634d;
+    private int background=NativeUi.WHITE,foreground=NativeUi.INK;
     private boolean closed;
+    private int imeBottom;
     private final Runnable visibilityChanged=()->{if(!closed)render();};
     /** The desktop pet: one sprite per render, hosted by the collapsed cut-out image. */
     private PetSprite pet;
@@ -59,8 +59,11 @@ final class StatusOverlay {
     private boolean petDown;
     private int petCombos;
     private Runnable holdFrame;
-    private AlertDialog petMenu;
-    private String petForm="linepup";
+    private boolean menuOpen;
+    private String petForm="maltese";
+    /** Most recent meaningful transition, retained briefly for important-only mode. */
+    private String petEvent=PetStateMachine.NONE;
+    private long petEventAt=-5000;
     /**
      * The bubble lives inside the pet's own window, not in a second overlay.
      *
@@ -78,12 +81,27 @@ final class StatusOverlay {
     private int bubbleSide=SpeechBubble.TAIL_LEFT;
     private int bubbleWidth,bubbleHeight;
 
+    private final Runnable dismissBubble=()->{if(!closed&&!menuOpen)closeBubble();};
+    private final Runnable policyTick=new Runnable(){public void run(){if(closed)return;render();main.postDelayed(this,30000);}};
+    private final SharedPreferences.OnSharedPreferenceChangeListener preferencesChanged=(prefs,key)->{if(key!=null&&key.startsWith("overlay"))main.post(()->{if(!closed)render();});};
+    private final BroadcastReceiver environmentChanged=new BroadcastReceiver(){public void onReceive(Context c,Intent i){main.post(()->{if(!closed)render();});}};
+    private Rect safeBounds(){
+        Rect bounds=new Rect(0,0,metrics().widthPixels,metrics().heightPixels);
+        if(Build.VERSION.SDK_INT>=30)try{WindowMetrics window=manager.getCurrentWindowMetrics();bounds=new Rect(window.getBounds());android.graphics.Insets insets=window.getWindowInsets().getInsetsIgnoringVisibility(WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout());bounds.inset(insets.left,insets.top,insets.right,Math.max(insets.bottom,imeBottom));}catch(Exception ignored){}
+        return bounds;
+    }
+    private boolean reducedMotion(){PowerManager power=(PowerManager)context.getSystemService(Context.POWER_SERVICE);BatteryManager battery=(BatteryManager)context.getSystemService(Context.BATTERY_SERVICE);return StatusSpine.reduced(context)||power!=null&&(!power.isInteractive()||power.isPowerSaveMode())||battery!=null&&battery.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)<15;}
     StatusOverlay(Context c){
         // `context` is the context the caller handed in and is kept as-is: it is the one
         // used to start activities, and a caller may legitimately wrap it (to intercept
         // startActivity, to scope preferences, or to pin a service). Replacing it with
         // the application context silently dropped those overrides.
         context=c;
+        prefs().registerOnSharedPreferenceChangeListener(preferencesChanged);
+        IntentFilter changes=new IntentFilter(Intent.ACTION_CONFIGURATION_CHANGED);changes.addAction(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED);changes.addAction(Intent.ACTION_SCREEN_ON);changes.addAction(Intent.ACTION_SCREEN_OFF);
+        if(Build.VERSION.SDK_INT>=33)context.registerReceiver(environmentChanged,changes,Context.RECEIVER_NOT_EXPORTED);else context.registerReceiver(environmentChanged,changes);
+        main.postDelayed(policyTick,30000);
+
         // The WindowManager, by contrast, must come from the process-wide application
         // context. The overlay is a system window that outlives any Activity, and binding
         // it to an Activity's WindowManager is what made addView throw once that Activity
@@ -177,15 +195,27 @@ final class StatusOverlay {
         String key=status.toString();
         // The computer caches this payload, so half the polls repeat the last one.
         if(key.equals(snapshotKey)&&connection.isEmpty()&&panel!=null){snapshot=status;return;}
+        JSONObject previous=snapshot;
         snapshotKey=key;snapshot=status;connection="";
         boolean wasPrimed=primed;primed=true;
+        String event=wasPrimed?PetStateMachine.reduce(previous,status,fresh,changed):PetStateMachine.NONE;
+        if(!event.isEmpty())markPetEvent(event);
         render();
         if(bubbleOpen)populateBubble();
         // First sync, repeat polls and pure status changes stay quiet; a genuinely new
         // reply or a new approval/question makes the pet react.
-        if(wasPrimed&&(!fresh.isEmpty()||changed))nudgePet();
+        if(wasPrimed&&(!fresh.isEmpty()||changed||!event.isEmpty()))nudgePet(event);
     });}
-    void disconnected(){main.post(()->{connection="连接中断";snapshotKey="";render();if(bubbleOpen)populateBubble();});}
+    void disconnected(){main.post(()->{connection="连接中断";markPetEvent("offline");snapshotKey="";render();if(bubbleOpen)populateBubble();nudgePet("offline");});}
+
+    private void markPetEvent(String event){
+        if(event==null||event.isEmpty())return;
+        if(PetStateMachine.priority(event)>=PetStateMachine.priority(petEvent)
+            ||SystemClock.uptimeMillis()-petEventAt>4200){
+            petEvent=event;petEventAt=SystemClock.uptimeMillis();
+            main.postDelayed(()->{if(!closed)render();},5400);
+        }
+    }
 
     private static boolean hasProgress(JSONObject task){
         String value=task.optString("progress","");
@@ -215,11 +245,13 @@ final class StatusOverlay {
     }
     private String petState(String statusLabel){
         if(!connection.isEmpty())return "offline";
+        if(PetStateMachine.ERROR.equals(petEvent)&&SystemClock.uptimeMillis()-petEventAt<4200)return "error";
+        if(PetStateMachine.COMPLETED.equals(petEvent)&&SystemClock.uptimeMillis()-petEventAt<3200)return "completed";
         if(statusLabel.contains("待"))return "waiting";
         if(statusLabel.equals("执行中"))return "working";
         if(statusLabel.equals("思考中"))return "thinking";
         // "就绪": rest, and doze off once nothing has happened for a while.
-        return SystemClock.uptimeMillis()-idleSince>90000?"sleep":"idle";
+        return SystemClock.uptimeMillis()-idleSince>60000?"sleep":"idle";
     }
     private void dress(PetSprite sprite,String statusLabel){
         if(sprite==null)return;
@@ -237,9 +269,10 @@ final class StatusOverlay {
      */
     private final Runnable petLoop=new Runnable(){@Override public void run(){
         petFrame=null;
-        if(closed||panel==null||pet==null||petHost==null||AppVisibility.visible())return;
+        if(closed||panel==null||pet==null||petHost==null||(AppVisibility.visible()&&!prefs().getBoolean("overlayForeground",false)))return;
+        int[] pendingCounts=new int[3];dress(pet,statusFor(collectActive(pendingCounts),pendingCounts));
         String state=pet.state();
-        long now=SystemClock.uptimeMillis(),elapsed=now-petStarted;
+        long now=SystemClock.uptimeMillis(),elapsed=(now-petStarted)*new OverlayPolicy(prefs()).speed/100;
         long period=state.equals("working")?1200:state.equals("thinking")?2000:state.equals("waiting")?1400:state.equals("sleep")?4600:3000;
         float blink=0f,position=(elapsed%3400)/3400f;
         if(position<.05f)blink=1f-Math.abs(position-.025f)/.025f;
@@ -267,15 +300,17 @@ final class StatusOverlay {
         // A tap needs the next frame to land soon; the slow idle cadence is too coarse
         // for a reaction that is over in a quarter of a second.
         boolean urgent=petDown||startle>0||now-lastTapAt<420;
-        petFrame=this;main.postDelayed(this,urgent?50:state.equals("working")?50:80);
+        petFrame=this;main.postDelayed(this,reducedMotion()?250:urgent?50:state.equals("working")?50:state.equals("offline")?500:120);
     }};
     private void startPet(){if(petFrame!=null)return;petStarted=SystemClock.uptimeMillis();petFrame=petLoop;main.post(petLoop);}
     private void stopPet(){if(petFrame!=null)main.removeCallbacks(petFrame);petFrame=null;}
     /** The pet's reaction to something new: a hop and a popping heart. */
-    private void nudgePet(){
+    private void nudgePet(){nudgePet(PetStateMachine.MESSAGE);}
+    private void nudgePet(String event){
         long now=SystemClock.uptimeMillis();
         if(now-lastNudge<1500)return;
         lastNudge=now;petNoticeAt=now;petHopAt=now;
+        if(event!=null&&!event.isEmpty()){markPetEvent(event);if(pet!=null)pet.event(petEvent);}
         startPet();
     }
 
@@ -287,8 +322,22 @@ final class StatusOverlay {
         // NativeUi every time the palette changed, and the floating pet kept the old
         // colours - unreadable against a dark canvas once the theme was retuned.
         if(theme.equals("warm"))theme="green";
-        NativeUi.theme(theme);
-        background=NativeUi.TINT;foreground=NativeUi.GREEN;
+        NativeUi.theme(context);
+        background=NativeUi.WHITE;foreground=NativeUi.INK;
+    }
+
+    private String displayMode(){
+        String value=prefs().getString("overlayMode","full");
+        return value.equals("important")||value.equals("badge")||value.equals("quiet")?value:"full";
+    }
+
+    private boolean importantNow(int[] counts){
+        if(bubbleOpen)return true;
+        if(!connection.isEmpty())return true;
+        if(counts!=null&&counts[0]+counts[1]+counts[2]>0)return true;
+        if(petEvent.isEmpty())return false;
+        long age=SystemClock.uptimeMillis()-petEventAt;
+        return age<5200&&PetStateMachine.priority(petEvent)>=PetStateMachine.priority(PetStateMachine.COMPLETED);
     }
 
     /**
@@ -322,16 +371,22 @@ final class StatusOverlay {
         // gate below would refuse the very draw the user just asked for, and the button
         // labelled "show it now" would do nothing while the app it was pressed in is on
         // screen - which is the state it is always pressed in.
-        else if(AppVisibility.visible()&&!forced)blocked="App 正在前台，切到其他应用后显示";
-        else if(!prefs().getBoolean("overlay",false))blocked="「显示实时任务悬浮窗」未开启";
+        else if(AppVisibility.visible()&&!forced&&!prefs().getBoolean("overlayForeground",false))blocked="App 正在前台，切到其他应用后显示";
+        else if(!prefs().getBoolean("overlay",false))blocked="「显示任务悬浮窗」未开启";
         else if(prefs().getLong("overlayHiddenUntil",0)>System.currentTimeMillis())blocked="悬浮窗暂时隐藏，到点后自动恢复";
         else if(!Settings.canDrawOverlays(context))blocked="缺少「显示在其他应用上层」权限";
+        else if(displayMode().equals("quiet"))blocked="悬浮窗处于静默模式";
+        else if(new OverlayPolicy(prefs()).quiet)blocked="当前为勿扰时段";
         if(blocked!=null){blockReason=blocked;remove();return;}
         blockReason="";
         colors();
         int[] counts=new int[3];
         java.util.ArrayList<JSONObject> active=collectActive(counts);
         String statusLabel=statusFor(active,counts);
+        String mode=displayMode();
+        if(mode.equals("important")&&!importantNow(counts)){
+            blockReason="仅重要事件模式：当前没有待处理事项";remove();return;
+        }
         // migrate, not a raw read: an installed device may still hold the name of a
         // pet that has since been removed from the roster.
         petForm=PetSprite.migrate(prefs().getString("pet",null));
@@ -347,6 +402,8 @@ final class StatusOverlay {
             panel=new LinearLayout(context);panel.setOrientation(0);panel.setGravity(Gravity.CENTER_VERTICAL);panel.setElevation(NativeUi.LIFT_FLAT);
             params=new WindowManager.LayoutParams(ui.dp(72),ui.dp(72),WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE|WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,PixelFormat.TRANSLUCENT);
             params.gravity=Gravity.TOP|Gravity.LEFT;
+            params.softInputMode=WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE;
+            if(Build.VERSION.SDK_INT>=30)panel.setOnApplyWindowInsetsListener((view,insets)->{int bottom=insets.getInsets(WindowInsets.Type.ime()).bottom;if(bottom!=imeBottom){imeBottom=bottom;main.post(()->{if(!closed&&panel!=null&&params!=null)layout(ui.dp(petForm.equals("none")||displayMode().equals("badge")?54:64),params.height);});}return insets;});
             anchorX=prefs().getInt("overlayX",ui.dp(8));anchorY=prefs().getInt("overlayY",ui.dp(160));params.x=anchorX;params.y=anchorY;
             // Adding the window is the one step that throws outright when the overlay
             // permission is missing or was revoked while the app was running. It used to
@@ -356,68 +413,79 @@ final class StatusOverlay {
             try{manager.addView(panel,params);}
             catch(Exception failure){panel=null;blockReason="无法创建悬浮窗："+(failure.getMessage()==null?failure.getClass().getSimpleName():failure.getMessage());lastBlockReason=blockReason;return;}
         }
-        // A cut-out: the window carries no surface, only the pet and its bubble.
+        // A cut-out: this window carries only the pet.
         panel.setBackground(null);
-        panel.removeAllViews();pet=null;petHost=null;
-        boolean collapsed=petForm.equals("none");
+        PetSprite previousPet=pet;panel.removeAllViews();pet=null;petHost=null;
+        boolean collapsed=petForm.equals("none")||mode.equals("badge");
         int petSize=ui.dp(64),chipSize=ui.dp(54);
 
         // The bubble sits on the side of the pet that has room for it, so it opens
         // towards the middle of the screen instead of off the edge.
-        boolean petOnLeft=(params.x+ui.dp(72)/2)<metrics().widthPixels/2;
-        bubbleSide=petOnLeft?SpeechBubble.TAIL_RIGHT:SpeechBubble.TAIL_LEFT;
-
-        bubbleWidth=Math.min(ui.dp(260),metrics().widthPixels-ui.dp(96));
-        bubbleHeight=ui.dp(132);
+        // Keep the chosen side while the bubble is open, including content updates.
+        Rect safe=safeBounds();int size=collapsed?chipSize:petSize;
+        if(!bubbleOpen)bubbleSide=anchorX+size/2<safe.centerX()?SpeechBubble.TAIL_LEFT:SpeechBubble.TAIL_RIGHT;
+        int available=bubbleSide==SpeechBubble.TAIL_LEFT?safe.right-anchorX-size-ui.dp(6):anchorX-safe.left-ui.dp(6);
+        bubbleWidth=Math.max(ui.dp(80),Math.min(ui.dp(new OverlayPolicy(prefs()).width),available));
+        bubbleHeight=ui.dp(menuOpen?276:196);
 
         if(collapsed){
             // "简洁": a small neutral handle so the overlay is still reachable.
             ImageView chip=new ImageView(context);
             GradientDrawable shape=new GradientDrawable();shape.setShape(GradientDrawable.OVAL);int pendingCount=counts[0]+counts[1]+counts[2];shape.setColor(pendingCount>0?withAlpha(0xffffa62b,0x28):background);shape.setStroke(ui.dp(1),withAlpha(foreground,0x40));
-            chip.setBackground(shape);chip.setScaleType(ImageView.ScaleType.CENTER);chip.setImageDrawable(new NativeUi.Symbol("chat",foreground,ui.dp(24)));
-            chip.setContentDescription("实时任务悬浮窗");
+            chip.setBackground(mode.equals("badge")?new InsetDrawable(shape,ui.dp(10)):shape);chip.setScaleType(ImageView.ScaleType.CENTER);chip.setImageDrawable(new NativeUi.Symbol("chat",foreground,ui.dp(mode.equals("badge")?16:24)));
+            chip.setContentDescription("任务悬浮窗");
             petHost=chip;attachTouch(chip);stopPet();
-            if(bubbleOpen)panel.addView(buildBubble(),bubbleParams(true));
+
             panel.addView(chip,new LinearLayout.LayoutParams(chipSize,chipSize));
-            layout(collapsed?chipSize:petSize,Math.max(chipSize,petSize));
+
+            layout(chipSize,chipSize);showBubbleWindow(chipSize);
             return;
         }
 
         ImageView host=new ImageView(context);
-        pet=new PetSprite(petForm,foreground,background,ui.dp(64));host.setImageDrawable(pet);host.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        boolean reused=previousPet!=null&&previousPet.form().equals(petForm);pet=reused?previousPet:new PetSprite(petForm,foreground,background,ui.dp(64));host.setImageDrawable(pet);host.setScaleType(ImageView.ScaleType.FIT_CENTER);
         dress(pet,statusLabel);
+        if(!reused&&!petEvent.isEmpty()&&SystemClock.uptimeMillis()-petEventAt<5000)pet.event(petEvent);
         int pendingCount=counts[0]+counts[1]+counts[2];
-        pet.badge(!connection.isEmpty()?0xff7b8794:pendingCount>0?0xffffa62b:0xff2e9b68,pendingCount);
-        host.setContentDescription("实时任务悬浮窗");
+        host.setContentDescription("任务悬浮窗");
         petHost=host;attachTouch(host);
         // greetPet rather than startPet: the notes only make sense on the frame the
         // animal first appears.
-        greetPet();
-        if(bubbleOpen)panel.addView(buildBubble(),bubbleParams(true));
+        if(reused)startPet();else greetPet();
+
         panel.addView(host,new LinearLayout.LayoutParams(petSize,petSize));
-        layout(petSize,Math.max(petSize,bubbleHeight));
+
+        layout(petSize,petSize);showBubbleWindow(petSize);
     }
 
-    /** Places the bubble on the correct side of the pet inside the panel. */
-    private LinearLayout.LayoutParams bubbleParams(boolean leading){
-        LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(bubbleWidth,bubbleHeight);
-        // The layer itself is the bubble plus the room its tail needs.
-        lp.setMargins(leading?0:ui.dp(6),0,leading?ui.dp(6):0,0);
-        return lp;
+    // The pet keeps its own fixed-size window. Resizing a left-opening window
+    // makes Android animate the window origin across the screen on dismissal.
+    private void removeBubbleWindow(){
+        if(bubbleLayer!=null){try{manager.removeViewImmediate(bubbleLayer);}catch(Exception ignored){}bubbleLayer=null;}
+    }
+    private void showBubbleWindow(int petSize){
+        removeBubbleWindow();if(!bubbleOpen)return;
+        View view=buildBubble();Rect safe=safeBounds();
+        WindowManager.LayoutParams lp=new WindowManager.LayoutParams(bubbleWidth,bubbleHeight,WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE|WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,PixelFormat.TRANSLUCENT);
+        lp.gravity=Gravity.TOP|Gravity.LEFT;lp.windowAnimations=0;
+        lp.x=bubbleSide==SpeechBubble.TAIL_LEFT?params.x+petSize+ui.dp(6):params.x-bubbleWidth-ui.dp(6);
+        lp.x=Math.max(safe.left,Math.min(lp.x,safe.right-bubbleWidth));
+        lp.y=Math.max(safe.top,Math.min(params.y-(bubbleHeight-petSize)/2,safe.bottom-bubbleHeight));
+        try{manager.addView(view,lp);}catch(Exception failure){removeBubbleWindow();}
     }
 
-    /** Sizes the window to the pet plus, when open, the bubble beside it. */
+    /** Keep the pet window at a constant size and screen anchor. */
     private void layout(int petSize,int rowHeight){
         if(panel==null||params==null)return;
-        int width=bubbleOpen?petSize+bubbleWidth+ui.dp(6):petSize;
-        int height=Math.max(petSize,bubbleOpen?rowHeight:petSize);
-        int maxX=Math.max(0,metrics().widthPixels-width);
-        // The panel is laid out pet-first, so with the bubble on the left the window
-        // has to start a bubble-width earlier to keep the pet where the user left it.
+        int width=petSize;
+        int height=petSize;
+        Rect safe=safeBounds();int maxX=Math.max(safe.left,safe.right-width);
+        // Bubble placement never changes this window origin.
         int left=anchorX;
-        if(bubbleOpen&&bubbleSide==SpeechBubble.TAIL_LEFT)left=anchorX-bubbleWidth-ui.dp(6);
-        left=Math.max(0,Math.min(left,maxX));
-        int top=Math.max(0,Math.min(anchorY,Math.max(0,metrics().heightPixels-height)));
+
+        left=Math.max(safe.left,Math.min(left,maxX));
+        int top=Math.max(safe.top,Math.min(anchorY-(height-petSize)/2,Math.max(safe.top,safe.bottom-height)));
         params.width=width;params.height=height;params.x=left;params.y=top;
         // Swallowing this exception was the one failure with no trace at all: the pet
         // would simply never appear and the log said nothing. If the window cannot be
@@ -429,6 +497,7 @@ final class StatusOverlay {
     /** Stick the pet to the nearest screen edge after a drag. */
     private void snapToEdge(){
         if(panel==null||params==null)return;
+        if(!new OverlayPolicy(prefs()).snap){anchorX=params.x;anchorY=params.y;prefs().edit().putInt("overlayX",anchorX).putInt("overlayY",anchorY).apply();return;}
         int width=metrics().widthPixels, target=params.x+panel.getWidth()/2<width/2?ui.dp(8):Math.max(ui.dp(8),width-panel.getWidth()-ui.dp(8));
         params.x=Math.max(0,Math.min(Math.max(0,width-panel.getWidth()),target));
         anchorX=params.x;anchorY=params.y;
@@ -470,7 +539,10 @@ final class StatusOverlay {
                         petDown=false;
                         if(pet!=null)pet.release();
                         stopHold();
+                        if(e.getActionMasked()==MotionEvent.ACTION_CANCEL)return true;
                         if(dragged){
+                            anchorX=params.x;anchorY=params.y;
+                            if(bubbleOpen)closeBubble();
                             snapToEdge();
                             return true;
                         }
@@ -482,9 +554,11 @@ final class StatusOverlay {
                             showPetMenu();
                         }else if(wasDown){
                             if(pet!=null)pet.tap();
-                            lastTapAt=SystemClock.uptimeMillis();petCombos=0;
-                            // A single tap always opens the task card beside the pet.
-                            openBubble();
+                            long now=SystemClock.uptimeMillis();
+                            boolean doubleTap=lastTapAt>0&&now-lastTapAt<360;
+                            lastTapAt=now;petCombos=doubleTap?Math.min(5,petCombos+1):1;
+                            if(doubleTap)openCurrentSession();
+                            else toggleBubble();
                         }
                         return true;
                 }
@@ -495,21 +569,22 @@ final class StatusOverlay {
 
     private void showPetMenu(){
         if(closed)return;
-        if(petMenu!=null&&petMenu.isShowing())return;
-        String[] choices={"打开 coding远程","隐藏 1 小时","关闭悬浮窗"};
-        AlertDialog dialog=new AlertDialog.Builder(context).setTitle("实时任务").setItems(choices,(d,which)->{
-            if(which==0){
-                try{context.startActivity(new Intent(context,MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_SINGLE_TOP));}catch(Exception ignored){}
-                closeBubble();
-            }else if(which==1){
-                prefs().edit().putLong("overlayHiddenUntil",System.currentTimeMillis()+60L*60L*1000L).apply();remove();
-            }else{
-                prefs().edit().putBoolean("overlay",false).remove("overlayHiddenUntil").apply();remove();
-            }
-        }).setNegativeButton("取消",null).create();
-        petMenu=dialog;dialog.setOnDismissListener(d->{if(petMenu==dialog)petMenu=null;});
-        Window window=dialog.getWindow();if(window!=null)window.setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY);
-        try{dialog.show();}catch(Exception failure){petMenu=null;lastBlockReason="无法打开悬浮窗菜单："+failure.getClass().getSimpleName();}
+        // Keep the menu in the same anchored bubble as task details. A dialog creates
+        // a second window, steals focus, and feels disconnected from the pet.
+        if(menuOpen)return;
+        menuOpen=true;
+        if(bubbleOpen){render();showScrim();}else openBubble();
+    }
+
+    private void openCurrentSession(){
+        int[] counts=new int[3];java.util.ArrayList<JSONObject> active=collectActive(counts);
+        JSONObject task=active.isEmpty()?null:active.get(0);
+        try{
+            Intent intent=new Intent(context,MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            if(task!=null)intent.putExtra("backend",task.optString("backend")).putExtra("sessionId",task.optString("id")).putExtra("title",task.optString("title","会话"));
+            context.startActivity(intent);
+        }catch(Exception ignored){}
+        closeBubble();
     }
 
     /** Keeps the stroke alive for as long as the finger is down. */
@@ -576,6 +651,7 @@ final class StatusOverlay {
     private void populateBubble(){
         if(bubbleList==null)return;
         bubbleList.removeAllViews();
+        if(menuOpen){populatePetMenu();return;}
         if(!connection.isEmpty()){bubbleList.addView(bubbleNote(connection));return;}
         int[] counts=new int[3];
         java.util.ArrayList<JSONObject> active=collectActive(counts);
@@ -585,30 +661,50 @@ final class StatusOverlay {
         }
         for(JSONObject task:active){
             LinearLayout item=new LinearLayout(context);item.setOrientation(1);item.setPadding(ui.dp(8),ui.dp(8),ui.dp(8),ui.dp(8));
-            String backend=task.optString("backend"),name=backend.equals("claude")?"Claude":backend.equals("deepseek")?"DeepSeek":"Codex";
+            String backend=task.optString("backend"),name=backend.equals("claude")?"Claude":backend.equals("deepseek")?"DeepSeek":"ChatGPT";
             JSONArray pending=AttentionTracker.pending(task);JSONObject first=pending.optJSONObject(0);
             java.util.LinkedHashSet<String> states=new java.util.LinkedHashSet<>();
             for(int i=0;i<pending.length();i++){JSONObject request=pending.optJSONObject(i);if(request!=null)states.add(request.optString("label","待处理"));}
             String state=first==null?"执行中":android.text.TextUtils.join(" · ",states);
-            TextView head=ui.text(name+" · "+state,NativeUi.CAPTION,foreground);
-            NativeUi.strong(head);
+            TextView head=ui.text(name+" · "+state,NativeUi.CAPTION,NativeUi.MUTED);
             head.setSingleLine();head.setEllipsize(android.text.TextUtils.TruncateAt.END);
-            ui.leading(head,backend.equals("deepseek")?"spark":"code",foreground,NativeUi.GLYPH_INLINE);
-            item.addView(head);
-            item.setBackground(ui.touch(first!=null?withAlpha(foreground,0x1f):android.graphics.Color.TRANSPARENT,NativeUi.CORNER_ROW,first!=null));
-            String raw=first==null?task.optString("progress","正在思考…"):first.optString("preview","点击处理");
+            LinearLayout heading=new LinearLayout(context);heading.setGravity(Gravity.CENTER_VERTICAL);
+            ImageView appIcon=ui.providerIcon(backend,22);appIcon.setContentDescription(name+"应用图标");appIcon.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);
+            LinearLayout.LayoutParams iconLayout=new LinearLayout.LayoutParams(ui.dp(22),ui.dp(22));iconLayout.rightMargin=ui.dp(8);heading.addView(appIcon,iconLayout);heading.addView(head,new LinearLayout.LayoutParams(0,-2,1));
+            item.addView(heading);
+            TextView session=ui.text(task.optString("title","会话"),NativeUi.BODY,NativeUi.ACCENT);NativeUi.strong(session);session.setTag("overlay-session-title");session.setMaxLines(2);session.setEllipsize(android.text.TextUtils.TruncateAt.END);session.setPadding(0,ui.dp(8),0,ui.dp(8));item.addView(session);
+            View separator=new View(context);separator.setTag("overlay-title-separator");separator.setBackgroundColor(NativeUi.EDGE);item.addView(separator,new LinearLayout.LayoutParams(-1,Math.max(1,ui.dp(.5f))));
+            item.setBackground(new StatusSpine(context,first!=null?"waiting":task.optString("status"),first!=null?NativeUi.WAIT_BG:NativeUi.WHITE));
+            String raw=first==null?task.optString("progress",""):first.optString("preview","点击处理");
             String line=prose(raw);
             // "正在思考…" rather than an empty row: a task with nothing readable left
             // after filtering is still running, and a blank line looks like a bug.
-            if(line.isEmpty())line=first==null?"正在思考…":"点开查看详情";
+            if(line.isEmpty())line=first!=null?"点开查看待处理事项":"正在处理任务，等待新的回复…";
             // One step under the body size: the bubble is a glance, not a transcript, and
             // at body size three lines of preview filled the whole speech bubble.
             TextView progress=ui.text(line,NativeUi.LABEL,foreground);
-            progress.setMaxLines(3);progress.setEllipsize(android.text.TextUtils.TruncateAt.END);progress.setPadding(0,ui.dp(4),0,0);item.addView(progress);
+            progress.setTag("overlay-session-content");progress.setVisibility(line.isEmpty()?View.GONE:View.VISIBLE);progress.setMaxLines(3);progress.setEllipsize(android.text.TextUtils.TruncateAt.END);progress.setPadding(0,ui.dp(8),0,0);item.addView(progress);
             LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.setMargins(0,ui.dp(2),0,ui.dp(2));bubbleList.addView(item,lp);
             item.setContentDescription((first==null?"打开运行会话 ":"打开待处理会话 ")+task.optString("id"));
             item.setOnClickListener(v->{context.startActivity(new Intent(context,MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_SINGLE_TOP).putExtra("backend",backend).putExtra("sessionId",task.optString("id")).putExtra("title",task.optString("title","会话")));closeBubble();});
         }
+    }
+
+    private void populatePetMenu(){
+        TextView title=ui.text("悬浮窗操作",NativeUi.TITLE,foreground);NativeUi.strong(title);
+        title.setPadding(ui.dp(4),ui.dp(6),ui.dp(4),ui.dp(8));bubbleList.addView(title);
+        menuAction("打开 coding远程","home",()->{try{context.startActivity(new Intent(context,MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_SINGLE_TOP));}catch(Exception ignored){}closeBubble();});
+        menuAction("打开当前会话","chat",this::openCurrentSession);
+        String[] modes={"full","important","badge","quiet"},labels={"完整动作","仅重要事件","状态角标","静默"};for(int i=0;i<modes.length;i++){final String mode=modes[i];menuAction(labels[i],displayMode().equals(mode)?"check":"dot",()->{prefs().edit().putString("overlayMode",mode).apply();closeBubble();render();});}
+        menuAction("隐藏 1 小时","sleep",()->{prefs().edit().putLong("overlayHiddenUntil",System.currentTimeMillis()+60L*60L*1000L).apply();remove();});
+        menuAction("关闭悬浮窗","close",()->{prefs().edit().putBoolean("overlay",false).remove("overlayHiddenUntil").apply();remove();});
+    }
+
+    private void menuAction(String label,String icon,final Runnable action){
+        LinearLayout item=new LinearLayout(context);item.setOrientation(LinearLayout.HORIZONTAL);item.setGravity(Gravity.CENTER_VERTICAL);item.setPadding(ui.dp(6),0,ui.dp(6),0);
+        TextView text=ui.text(label,NativeUi.LABEL,foreground);ui.leading(text,icon,foreground,NativeUi.GLYPH_INLINE);item.addView(text,new LinearLayout.LayoutParams(0,ui.dp(42),1));
+        item.setContentDescription(label);item.setBackground(ui.touch(withAlpha(foreground,0x16),NativeUi.CORNER_ROW,true));item.setOnClickListener(v->action.run());
+        LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,ui.dp(44));lp.setMargins(0,ui.dp(2),0,ui.dp(2));bubbleList.addView(item,lp);
     }
     private TextView bubbleNote(String message){
         // A note is already curated, so the filter is only there to strip an
@@ -649,7 +745,7 @@ final class StatusOverlay {
             // bubble ended up printing a stage name instead of what the task actually said.
             if(isStatusLabel(trimmed))continue;
             // No CJK means the line is code, an identifier or a command.
-            if(!hasChinese(trimmed))continue;
+            if(!hasChinese(trimmed)&&!trimmed.matches(".*[A-Za-z]{2,}\\s+[A-Za-z]{2,}.*"))continue;
             kept.append(trimmed).append('\n');
         }
         int end=kept.length();
@@ -686,7 +782,7 @@ final class StatusOverlay {
         String[] parts=line.split("[：:，,、·\\-—>》]+");
         int words=0,meaningful=0;
         for(String part:parts){
-            String piece=part.trim();
+            String piece=part.trim().replaceAll("[.。…!！\\s]+$","");
             if(piece.isEmpty())continue;
             meaningful++;
             boolean stage=false;
@@ -708,20 +804,23 @@ final class StatusOverlay {
     private void toggleBubble(){if(bubbleOpen)closeBubble();else openBubble();}
     private void openBubble(){
         if(bubbleOpen)return;
+        Rect safe=safeBounds();int size=ui.dp(petForm.equals("none")||displayMode().equals("badge")?54:64);
+        bubbleSide=anchorX+size/2<safe.centerX()?SpeechBubble.TAIL_LEFT:SpeechBubble.TAIL_RIGHT;
         bubbleOpen=true;
         useScrim=true;
         render();
         showScrim();
+        main.removeCallbacks(dismissBubble);int duration=new OverlayPolicy(prefs()).duration;if(duration>0)main.postDelayed(dismissBubble,duration*1000L);
     }
     private void closeBubble(){
         if(!bubbleOpen)return;
         // A tap outside is an ordinary dismissal, not a reason to stop showing the pet.
         useScrim=false;hideScrim();
-        bubbleOpen=false;
-        bubbleLayer=null;bubbleBack=null;bubbleList=null;
+        bubbleOpen=false;menuOpen=false;
+        removeBubbleWindow();bubbleBack=null;bubbleList=null;
         render();
     }
-    private void closeBubbleNow(){useScrim=false;hideScrim();bubbleLayer=null;bubbleBack=null;bubbleList=null;bubbleOpen=false;}
+    private void closeBubbleNow(){useScrim=false;hideScrim();removeBubbleWindow();bubbleBack=null;bubbleList=null;bubbleOpen=false;menuOpen=false;}
 
     /** A full-width, fully transparent catcher under the bubble.
      *
@@ -754,7 +853,7 @@ final class StatusOverlay {
             if(raisePet)manager.removeViewImmediate(panel);
             manager.addView(catcher,lp);
             scrim=catcher;
-            if(raisePet)manager.addView(panel,params);
+            if(raisePet){manager.addView(panel,params);showBubbleWindow(params.width);}
         }catch(Exception failure){
             // Any failure here leaves the pet's window detached, so put it back before
             // giving up: the bubble stays open until the pet is tapped again, which is the
@@ -770,8 +869,8 @@ final class StatusOverlay {
         scrim=null;
     }
 
-    private void remove(){stopPet();pet=null;petHost=null;snapshotKey="";closeBubbleNow();if(petMenu!=null){try{petMenu.dismiss();}catch(Exception ignored){}petMenu=null;}if(panel!=null){try{manager.removeView(panel);}catch(Exception ignored){}panel=null;}hosted=false;lastBlockReason=blockReason.isEmpty()?"尚未收到电脑状态":blockReason;}
-    void close(){main.post(()->{closed=true;AppVisibility.remove(visibilityChanged);remove();
+    private void remove(){stopPet();pet=null;petHost=null;snapshotKey="";closeBubbleNow();if(panel!=null){try{manager.removeView(panel);}catch(Exception ignored){}panel=null;}hosted=false;lastBlockReason=blockReason.isEmpty()?"尚未收到电脑状态":blockReason;}
+    void close(){main.post(()->{closed=true;main.removeCallbacks(policyTick);main.removeCallbacks(dismissBubble);prefs().unregisterOnSharedPreferenceChangeListener(preferencesChanged);try{context.unregisterReceiver(environmentChanged);}catch(Exception ignored){}AppVisibility.remove(visibilityChanged);remove();
         // The instance is finished: clearing the static reference is what stops the
         // settings button from posting a render against a service that has already been
         // torn down, which used to throw on the main thread and close the app.

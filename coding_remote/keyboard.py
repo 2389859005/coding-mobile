@@ -1,4 +1,4 @@
-"""Launch the bundled Console-only keyboard injector; no clipboard or CDP."""
+"""Launch the Console-only injector with verified paste and clipboard restore."""
 import json
 import os
 from pathlib import Path
@@ -63,7 +63,7 @@ def inject(pid, script, directory):
     helper = helper_path()
     # Direct Console source. Dynamic eval after an await is blocked by Claude's
     # CSP. Build-time minification removes newlines without changing that policy.
-    if not script.startswith('/* coding remote script */') or '\n' in script or '\r' in script:
+    if not script.startswith('window.__claudeMobileBridge?.stop()') or '\n' in script or '\r' in script:
         raise ValueError('Console 连接脚本必须由构建工具生成')
     expression=script
     path = Path(directory)/'keyboard-connect.js'

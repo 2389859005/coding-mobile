@@ -8,7 +8,7 @@ from pathlib import Path
 from build_common import unpack, COOKIE, ENTRY, MAGIC, EXPECTED_EXE as EXPECTED, ROOT
 
 
-def build(source=None):
+def build(source=None, output=None):
     original=Path(source) if source else ROOT/'CodexMobileAssistant-Windows-1.6.23.exe'
     assert hashlib.sha256(original.read_bytes()).hexdigest()==EXPECTED
     subprocess.run(['node',str(ROOT/'packaging/minify_connector.cjs')],cwd=ROOT,check=True)
@@ -18,6 +18,7 @@ def build(source=None):
                     '/out:'+str(ROOT/'.local/coding-tray.exe'),str(ROOT/'packaging/coding-tray.cs')],check=True)
     subprocess.run([str(compiler/'csc.exe'),'/nologo','/target:exe','/platform:x64',
                     '/out:'+str(ROOT/'.local/claude-keyboard.exe'),
+                    '/reference:System.Windows.Forms.dll','/reference:System.Drawing.dll',
                     *['/reference:'+str(compiler/'WPF'/name) for name in ['UIAutomationClient.dll','UIAutomationTypes.dll','WindowsBase.dll']],
                     str(ROOT/'packaging/claude-keyboard.cs')],check=True)
     compiled=ROOT/'.local/native-entry.marshal'
@@ -36,7 +37,7 @@ def build(source=None):
     subprocess.run([str(ROOT/'.local/python313/python.exe'),str(ROOT/'packaging/compile_loader.py'),str(loader)],check=True)
     prefix,entries,version,dll=unpack(original.read_bytes())
     from product_icon import replace_icon
-    prefix=replace_icon(prefix,ROOT/'packaging/product/icon.ico')
+    prefix=replace_icon(prefix,ROOT/'packaging/product/icon.ico',version='2.2.5')
     rows=[]
     removed=[]
     for name,payload,raw,compressed,kind in entries:
@@ -93,7 +94,7 @@ def build(source=None):
         encoded=name.encode()+b'\0';size=(ENTRY.size+len(encoded)+15)//16*16
         data.extend(ENTRY.pack(size,pos,packed,raw,compressed,kind));data.extend(encoded.ljust(size-ENTRY.size,b'\0'))
     size=len(data)-offset;data.extend(COOKIE.pack(MAGIC,len(data)+COOKIE.size,offset,size,version,dll))
-    target=ROOT/'dist/CodingRemoteAssistant-Windows-2.2.2.exe';target.parent.mkdir(exist_ok=True)
+    target=Path(output) if output else ROOT/'dist/CodingRemoteAssistant-Windows-2.2.5.exe';target.parent.mkdir(parents=True,exist_ok=True)
     content=prefix+data
     _,after,_,_=unpack(content);assert len(after)==len(rows)
     temporary=target.with_suffix('.tmp');temporary.write_bytes(content);temporary.replace(target)
@@ -106,4 +107,5 @@ def build(source=None):
 if __name__=='__main__':
     import argparse
     parser=argparse.ArgumentParser();parser.add_argument('--source',help='Path to the verified original Windows 1.6.23 EXE')
-    build(parser.parse_args().source)
+    parser.add_argument('--output',help='Output EXE path, including when the previous build is running')
+    args=parser.parse_args();build(args.source,args.output)

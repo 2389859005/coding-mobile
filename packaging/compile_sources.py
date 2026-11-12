@@ -24,7 +24,9 @@ def compile_sources(pairs, output):
     payload = {}
     for name, source in pairs:
         text = Path(source).read_text('utf-8')
-        payload[name] = marshal.dumps(compile(text, str(source), 'exec', dont_inherit=True, optimize=2))
+        # Frozen self-check assertions must execute just like the source checks.
+        optimize = 0 if name == 'coding_remote.verification' else 2
+        payload[name] = marshal.dumps(compile(text, str(source), 'exec', dont_inherit=True, optimize=optimize))
     Path(output).write_bytes(marshal.dumps(payload))
     return len(payload)
 

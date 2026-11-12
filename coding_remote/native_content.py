@@ -6,9 +6,9 @@ from urllib.parse import unquote,urlsplit
 
 def image_paths(message):
     """Accept explicit image-view arguments, including orchestration wrappers."""
-    name=re.sub(r'[^a-z0-9]','', ' '.join(str(message.get(k,'')) for k in ('title','name','kind','type')).lower())
-    source=text(message.get('text'))
-    if not any(n in name for n in ('viewimage','imageview')) and not re.search(r'(?:view_image|imageview|image_view|viewImage)\s*\(',source):return []
+    names=[str(message.get(k,'')) for k in ('name','tool','title','kind','type')]
+    direct=any(re.sub(r'[^a-z0-9]','',n.rsplit('__',1)[-1].split('.')[-1].lower()) in ('viewimage','imageview','read','readimage') for n in names)
+    source=text(message.get('arguments',message.get('input',message.get('text'))))
     values=[]
     def visit(value):
         if isinstance(value,dict):
@@ -17,24 +17,32 @@ def image_paths(message):
                 elif isinstance(v,(dict,list)):visit(v)
         elif isinstance(value,list):
             for v in value:visit(v)
-    visit(message)
+    if direct:visit(message)
     try:
-        parsed=json.loads(source);visit(parsed)
+        parsed=json.loads(source)
+        if direct:visit(parsed)
+        # A parallel wrapper contains independent calls: only inspect image tools.
+        if isinstance(parsed,dict):
+            for call in parsed.get('tool_uses',[]):
+                if isinstance(call,dict):values.extend(image_paths({'name':call.get('recipient_name',''),'input':call.get('parameters',{})}))
         if isinstance(parsed,dict) and isinstance(parsed.get('code'),str):source=parsed['code']
     except (ValueError,TypeError):pass
-    # tools.view_image({path:"..."}) inside a JavaScript orchestration cell.
-    for match in re.finditer(r'(?:["\']?(?:path|image_path|file_path)["\']?\s*:\s*)("(?:\\.|[^"\\])*"|\'[^\']*\')',source):
-        raw=match.group(1)
-        try:values.append(json.loads(raw) if raw.startswith('"') else raw[1:-1].replace('\\\\','\\'))
-        except ValueError:pass
-    if any(n in name for n in ('viewimage','imageview')):
+    # Limit wrapper extraction to the image call's own literal argument object.
+    # A neighbouring exec_command/path must never become an image permission.
+    objects=[source] if direct else re.findall(r'(?:view_image|imageview|image_view|viewImage)\s*\(\s*(\{[^{}]*\})',source)
+    for obj in objects:
+        for match in re.finditer(r'(?:["\']?(?:path|image_path|file_path)["\']?\s*:\s*)("(?:\\.|[^"\\])*"|\'[^\']*\')',obj):
+            raw=match.group(1)
+            try:values.append(json.loads(raw) if raw.startswith('"') else raw[1:-1].replace('\\\\','\\'))
+            except ValueError:pass
+    if direct:
         values += re.findall(r'(?im)(?:^|[\s`"\'])((?:[A-Z]:[/\\]|/)[^\r\n`"\'<>]*?\.(?:png|jpe?g|webp|gif|bmp))(?=$|[\s`"\'])',source)
     out=[]
     for value in values:
         if value.startswith('file:'):
             value=unquote(urlsplit(value).path)
             if re.match(r'^/[A-Za-z]:/',value):value=value[1:]
-        if re.search(r'\.(png|jpe?g|webp|gif|bmp)$',value,re.I) and value not in out:out.append(value)
+        if re.search(r'\.(png|jpe?g|webp|gif|bmp)$',value,re.I) and not re.match(r'^[a-z]+://',value,re.I) and value not in out:out.append(value)
     return out
 
 
@@ -50,15 +58,15 @@ def codex_messages(value):
         tid = str(turn.get('id', ''))
         for index, message in enumerate(turn.get('messages', [])):
             kind = message.get('kind', message.get('type', ''))
-            if kind in ('commandExecution', 'exec_command', 'bash', 'terminalCommand'):
-                continue
             base = {'id': str(message.get('id') or f'{tid}:{index}'), 'turnId': tid,
                     'role': message.get('role', 'activity'), 'kind': kind,
                     'title': message.get('title', ''), 'status': message.get('status', '')}
             body = text(message.get('text'))
-            images=image_paths(message)
+            images=image_paths(message) if base['role'] not in ('user','assistant') else []
             if images:
                 for n,path in enumerate(images):rows.append({**base,'id':base['id']+':image:'+str(n),'kind':'image','role':'activity','title':'查看图片','text':'![图片](<'+path+'>)'})
+                continue
+            if kind in ('commandExecution', 'exec_command', 'bash', 'terminalCommand'):
                 continue
             for attachment in message.get('attachments') or []:
                 if not isinstance(attachment,dict):continue
@@ -137,6 +145,30 @@ def fenced_messages(messages):
                 language = line[3:].strip() if language is None else None
             else: body.append(line)
         if body: yield part()
+
+
+def message_chunks(message, limit=3000):
+    """Keep table rows and their header together when the API pages an answer."""
+    source=str(message.get('text') or '')
+    if message.get('kind') in ('code','snippet') or '|' not in source:
+        return [source[i:i+limit] for i in range(0,len(source),limit)] or ['']
+    lines=source.splitlines(keepends=True);chunks=[];current='';i=0
+    while i<len(lines):
+        delimiter=lines[i+1].strip().strip('|').strip() if i+1<len(lines) else ''
+        if '|' in lines[i] and re.fullmatch(r':?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+',delimiter):
+            if current:chunks.append(current);current=''
+            header=lines[i]+lines[i+1];current=header;i+=2
+            while i<len(lines) and lines[i].strip() and '|' in lines[i]:
+                line=lines[i]
+                if len(current)+len(line)>limit and current!=header:chunks.append(current);current=header
+                current+=line;i+=1
+            chunks.append(current);current=''
+        else:
+            line=lines[i];i+=1
+            if len(current)+len(line)>limit and current:chunks.append(current);current=''
+            current+=line
+    if current:chunks.append(current)
+    return [part[j:j+limit] for part in chunks for j in range(0,len(part),limit)] or ['']
 
 
 def permission_selection(settings):

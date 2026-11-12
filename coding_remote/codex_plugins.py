@@ -55,6 +55,18 @@ def grouped_catalog(raw, installed):
 
 
 class PluginBridgeMixin:
+    def _event(self,message):
+        super()._event(message)
+        callback=getattr(self,'live_changed',None)
+        if callback and isinstance(message,dict) and message.get('method') in ('thread-stream-state-changed','client-status-changed'):
+            callback()
+
+    def _disconnected(self,*args,**kwargs):
+        try:return super()._disconnected(*args,**kwargs)
+        finally:
+            callback=getattr(self,'live_changed',None)
+            if callback:callback()
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._plugin_lock, self._plugin_cache = threading.Lock(), {}

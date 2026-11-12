@@ -24,12 +24,18 @@ final class SecureStore {
         return (SecretKey)store.getKey(ALIAS,null);
     }
     static void save(Context context,String value) throws Exception {
+        save(context,"device",value);
+    }
+    static void save(Context context,String slot,String value) throws Exception {
         Cipher c=Cipher.getInstance("AES/GCM/NoPadding");c.init(Cipher.ENCRYPT_MODE,key(true));
         String text=Base64.encodeToString(c.getIV(),Base64.NO_WRAP)+":"+Base64.encodeToString(c.doFinal(value.getBytes("UTF-8")),Base64.NO_WRAP);
-        if(!context.getSharedPreferences("coding-remote",0).edit().putString("device",text).commit())throw new Exception("无法保存连接信息");
+        if(!context.getSharedPreferences("coding-remote",0).edit().putString(slot,text).commit())throw new Exception("无法保存连接信息");
     }
     static String read(Context context) throws Exception {
-        String text=context.getSharedPreferences("coding-remote",0).getString("device","");if(text.isEmpty())return "";
+        return read(context,"device");
+    }
+    static String read(Context context,String slot) throws Exception {
+        String text=context.getSharedPreferences("coding-remote",0).getString(slot,"");if(text.isEmpty())return "";
         String[] parts=text.split(":",2);Cipher c=Cipher.getInstance("AES/GCM/NoPadding");
         c.init(Cipher.DECRYPT_MODE,key(false),new GCMParameterSpec(128,Base64.decode(parts[0],Base64.NO_WRAP)));
         return new String(c.doFinal(Base64.decode(parts[1],Base64.NO_WRAP)),"UTF-8");
